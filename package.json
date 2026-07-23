@@ -1,0 +1,92 @@
+{
+  "name": "@theonaai/heron-sdk",
+  "version": "0.7.0",
+  "description": "Heron vendor SDK — one hook before a tool call, one signed statement after. Framework-agnostic guard + declarative reduction, no server dependencies.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./contract": {
+      "types": "./dist/contract.d.ts",
+      "import": "./dist/contract.js",
+      "require": "./dist/contract.cjs"
+    },
+    "./edge-classify": {
+      "types": "./dist/edge-classify.d.ts",
+      "import": "./dist/edge-classify.js",
+      "require": "./dist/edge-classify.cjs"
+    },
+    "./pseudonym-core": {
+      "types": "./dist/pseudonym-core.d.ts",
+      "import": "./dist/pseudonym-core.js",
+      "require": "./dist/pseudonym-core.cjs"
+    },
+    "./statements": {
+      "types": "./dist/statements.d.ts",
+      "import": "./dist/statements.js",
+      "require": "./dist/statements.cjs"
+    },
+    "./policy/taxonomy": {
+      "types": "./dist/policy/taxonomy.d.ts",
+      "import": "./dist/policy/taxonomy.js",
+      "require": "./dist/policy/taxonomy.cjs"
+    },
+    "./crypto/jcs": {
+      "types": "./dist/crypto/jcs.d.ts",
+      "import": "./dist/crypto/jcs.js",
+      "require": "./dist/crypto/jcs.cjs"
+    },
+    "./crypto/hash": {
+      "types": "./dist/crypto/hash.d.ts",
+      "import": "./dist/crypto/hash.js",
+      "require": "./dist/crypto/hash.cjs"
+    },
+    "./crypto/ed25519": {
+      "types": "./dist/crypto/ed25519.d.ts",
+      "import": "./dist/crypto/ed25519.js",
+      "require": "./dist/crypto/ed25519.cjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/theonaai/heron-sdk.git"
+  },
+  "homepage": "https://github.com/theonaai/heron-sdk#readme",
+  "bugs": {
+    "url": "https://github.com/theonaai/heron-sdk/issues"
+  },
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org",
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@noble/ed25519": "^3.1.0",
+    "@noble/hashes": "^2.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "tsup": "^8.0.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.10"
+  }
+}

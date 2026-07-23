@@ -1,0 +1,86 @@
+name: Publish
+
+# Publishing is one-way: a version taken in a registry cannot be reused, and a vendor who installed
+# it has it forever. So this never runs on a push — it is started by a person who has decided to cut
+# a release, and it refuses to do anything surprising once started.
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Pack and verify only — do not publish"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  # Required for npm provenance / Trusted Publishing (OIDC). With Trusted Publishing configured on
+  # npmjs, no token is needed at all; the NPM_TOKEN fallback below covers the token path.
+  id-token: write
+
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: "@theonaai/heron-sdk → npm"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+          scope: "@theonaai"
+          cache: npm
+
+      - run: npm ci
+
+      # Everything CI already guarantees on a pull request, re-checked at the one moment it becomes
+      # irreversible. A release is not the place to trust that main was green an hour ago.
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+      # A published version can never be replaced, so a repeat of an existing one has to stop here
+      # rather than fail halfway through `npm publish` with a 409 and a half-told story.
+      - name: Refuse a version that is already published
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          version=$(node -p "require('./package.json').version")
+          echo "Releasing version $version"
+
+          # The three outcomes are kept apart on purpose. Swallowing stderr would collapse them into
+          # "not published", so a token or network problem would read as a green light and the run
+          # would go on to fail inside `npm publish`. E404 is the only answer that means "free".
+          if out=$(npm view "@theonaai/heron-sdk@$version" version --registry=https://registry.npmjs.org 2>&1); then
+            echo "::error::@theonaai/heron-sdk@$version is already published. Bump the version in package.json."
+            exit 1
+          fi
+
+          if ! grep -qi 'E404\|404 Not Found' <<<"$out"; then
+            echo "$out"
+            echo "::error::Could not determine whether $version exists — the registry answered with something other than 404 (auth, network, or a rate limit). Refusing to publish blind."
+            exit 1
+          fi
+          echo "Version $version is free."
+
+      # What a vendor will actually receive, listed before it is sent rather than after.
+      - name: Show the tarball contents
+        run: npm pack --dry-run
+
+      # `--provenance` attaches a signed build attestation (needs id-token: write above). Works with
+      # Trusted Publishing (no token) or with the NPM_TOKEN fallback.
+      - name: Publish
+        if: ${{ !inputs.dry_run }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --provenance --access public
+
+      - name: Dry run — nothing was published
+        if: ${{ inputs.dry_run }}
+        run: echo "dry_run was set. Re-run with it unchecked to publish."

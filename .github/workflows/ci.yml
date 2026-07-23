@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: npm
+
+      - run: npm ci
+
+      # tsc catches what tsup (esbuild) does not: a type that will not emit is otherwise discovered
+      # by a vendor running `npm i @theonaai/heron-sdk`, which is the worst possible place to find it.
+      - run: npm run typecheck
+
+      # Holds the import graph server-free and runtime-free (tests/sdk-portable.test.ts) and checks
+      # the signed-bytes primitives — the whole reason this package can be extracted at all.
+      - run: npm test
+
+      - run: npm run build
+
+      # What a vendor will actually receive. `files` is ["dist"], so anything else here is a leak.
+      - run: npm pack --dry-run
+
+      # The SDK ships to vendors we do not run: a vulnerable transitive dependency lands in someone
+      # else's build, not ours.
+      - run: npm audit --audit-level=moderate
