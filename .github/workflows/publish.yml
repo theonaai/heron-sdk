@@ -37,6 +37,13 @@ jobs:
           scope: "@theonaai"
           cache: npm
 
+      # Trusted Publishing exchanges an OIDC token for a short-lived registry credential, and only
+      # npm >= 11.5 knows how to do it. Node 22 ships npm 10, which silently has no idea it is meant
+      # to: it reaches `npm publish` with no credential at all and fails ENEEDAUTH, which reads as a
+      # missing secret rather than as a client too old to use the one thing configured. Pinned to the
+      # major rather than `@latest` so a publish cannot change client mid-release.
+      - run: npm install -g npm@^11
+
       - run: npm ci
 
       # Everything CI already guarantees on a pull request, re-checked at the one moment it becomes
