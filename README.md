@@ -272,6 +272,12 @@ is a signed falsehood, it takes those calls out of the rules that would have cau
 evidence page reports it as vendor-asserted. Narrow keys you can defend beat one key that covers
 everything.
 
+**A signal is about *this call*; a tool catalogue is about the tool.** If you publish one (`PUT
+/v1/tool-catalog`), what it says crosses as `catalogued` — ranked above `derived`, because you signed
+it, and below `declared`, because no catalogue entry can know that *this* invocation went to an
+outside recipient. Put the tool's standing facts there and keep `signals` for what varies per call;
+the per-call signal wins where both speak, and the evidence page counts the two apart.
+
 ## The reference edge classifier — the signals you do not have to write
 
 Most of the `signals` above are mechanical: how many recipients, how many records, whether an address
