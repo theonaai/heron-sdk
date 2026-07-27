@@ -354,6 +354,7 @@ The root export carries the vendor surface:
 - `classifyAtEdge`, `EdgeClassifierOptions` — the reference classifier over a call's arguments.
 - `pseudonymWith`, `replaceAnchors`, `collectAnchors`, `ANCHOR_PATTERNS`, `AnchorType` — edge tokenisation.
 - `buildExecutionEvidencePayload`, `ExecutionEvidencePayload` — the statement you sign.
+- `buildToolCatalog`, `catalogHash`, `resolveCatalogEntry`, `CatalogEntry` — what your tools *are*.
 
 The signed-bytes core is also reachable through stable subpaths, for a consumer that recomputes a
 receipt or a chain from the published bundle — this is how the Heron app and `verify-receipt` reuse
@@ -366,7 +367,40 @@ import { signCanonical, verifyCanonical } from "@theonaai/heron-sdk/crypto/ed255
 ```
 
 Also exported as subpaths: `@theonaai/heron-sdk/contract`, `.../edge-classify`, `.../pseudonym-core`,
-`.../statements`, `.../policy/taxonomy`.
+`.../statements`, `.../tool-catalog`, `.../policy/taxonomy`.
+
+## The tool catalogue — what your tools are, as opposed to what one call did
+
+A `signals` object describes one **call**. The catalogue describes one **tool**, and Heron treats the
+two differently on purpose: a per-call signal always wins, and a catalogue entry is asserted for
+every call that tool will ever serve.
+
+It matters because of what happens when you send nothing. Heron then works the dimension out from
+the tool's **name** and publishes it as `derived` — which reads to your reviewer as an independent
+inference and is not one: the name is a string you chose. A catalogue is the same knowledge under
+your key, with a date on it.
+
+```ts
+await heron.publishToolCatalog([
+  { name: "SESSION_MEMORY_WRITE", signals: { op: "write", destination: "internal" } },
+  { name: "APOLLO_PEOPLE_ENRICHMENT", signals: { op: "read", destination: "third_party", data_class: "personal" } },
+  { name: "send_email", signals: {} }, // listed, and we state nothing — see below
+])
+```
+
+Send it **on every process start**. Heron is idempotent by content: the same facts hash to the same
+row, so re-sending an unchanged catalogue writes nothing, and replicas booting together are one
+statement rather than a stream of duplicates for your reviewer to read past.
+
+Three rules worth knowing before you write one:
+
+- **Only facts that are constant for the tool.** A recipient count or an amount belongs to a call.
+  `destination` is allowed because for many tools it genuinely is constant — state it where it is.
+- **An empty entry is legal, and it is not the same as silence.** Listing a tool and stating nothing
+  says you have no constant fact to offer; leaving it out says your enumeration missed it. The
+  evidence page shows those separately, and only the second is a bug.
+- **A `200` does not mean it verified.** A bad signature is stored and reported rather than rejected —
+  refusing it would delete the evidence that a vendor's signing is broken. Read `signature_valid`.
 
 ## Requirements
 

@@ -3,6 +3,7 @@ import { keyPairFromSeed, signCanonical } from "./crypto/ed25519";
 import { hashCanonical } from "./crypto/hash";
 import { type AnchorType, collectAnchors, pseudonymWith } from "./pseudonym-core";
 import { buildExecutionEvidencePayload } from "./statements";
+import { type CatalogEntry, buildToolCatalog, catalogHash } from "./tool-catalog";
 
 /**
  * The vendor holds its own pseudonym key, so it needs no per-org separation: the key
@@ -400,7 +401,63 @@ export class HeronClient {
     );
   }
 
+  /**
+   * Publish what your tools *are* — one signed statement, sent on every process start.
+   *
+   * The catalogue is canonicalised and hashed here, and Heron is idempotent by that content: the
+   * same facts resolve to the same row however many replicas send them, so "publish on boot" is the
+   * intended usage rather than a stream of duplicates for your reviewer to read past. It answers a
+   * different question from `signals`: this one is true of every call the tool will ever serve, and
+   * the per-call signal always wins over it.
+   *
+   * The signed bytes are the canonical catalogue — the body minus `signature` — so anyone holding
+   * the request can verify it without knowing anything about our transport. It is `PUT`, and unlike
+   * the other three calls it is not in front of a tool call the agent is waiting on, so the retry
+   * budget here is only about a blip: this client's retries are tens of milliseconds. A Heron
+   * restart is longer than that, and waiting one out is the caller's schedule, not this method's.
+   *
+   * A bad signature is *not* an error here: Heron stores the catalogue and raises the finding
+   * (refusing it would delete the evidence that a vendor's signing is broken, on the one artefact
+   * whose whole question is "signed by whom"). So a `200` alone does not mean you published
+   * something that verifies — read `signature_valid`.
+   */
+  async publishToolCatalog(entries: readonly CatalogEntry[]): Promise<{
+    ok: boolean;
+    catalog_hash: string;
+    tools: number;
+    signature_valid: boolean;
+    replay?: boolean;
+  }> {
+    const catalog = buildToolCatalog(entries);
+    const { seed } = keyPairFromSeed(this.options.vendorSeed);
+
+    return this.send(
+      "PUT",
+      "/v1/tool-catalog",
+      {
+        ...catalog,
+        signature: {
+          kid: this.options.vendorKid,
+          alg: "Ed25519",
+          value: signCanonical(catalog, seed),
+        },
+      },
+      // Keyed by what it says, not by when it was sent: two replicas booting together are one
+      // statement, and a retry of it is the same statement again.
+      `catalog:${catalogHash(catalog)}`,
+    );
+  }
+
   private async post<T>(path: string, body: unknown, idempotencyKey: string): Promise<T> {
+    return this.send("POST", path, body, idempotencyKey);
+  }
+
+  private async send<T>(
+    method: "POST" | "PUT",
+    path: string,
+    body: unknown,
+    idempotencyKey: string,
+  ): Promise<T> {
     if (this.breaker?.isOpen()) {
       // Retryable, because this says nothing about the request: it says we are not asking right now.
       throw new HeronUnavailableError(
@@ -415,7 +472,7 @@ export class HeronClient {
     let last: HeronUnavailableError | null = null;
 
     for (let attempt = 1; attempt <= attempts; attempt++) {
-      const outcome = await this.attempt<T>(path, body, idempotencyKey);
+      const outcome = await this.attempt<T>(method, path, body, idempotencyKey);
       if ("value" in outcome) {
         this.breaker?.recordSuccess();
         return outcome.value;
@@ -443,6 +500,7 @@ export class HeronClient {
   }
 
   private async attempt<T>(
+    method: "POST" | "PUT",
     path: string,
     body: unknown,
     idempotencyKey: string,
@@ -452,7 +510,7 @@ export class HeronClient {
 
     try {
       const response = await this.doFetch(`${this.options.baseUrl}${path}`, {
-        method: "POST",
+        method,
         headers: {
           "content-type": "application/json",
           authorization: `Bearer ${this.options.apiKey}`,
