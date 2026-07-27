@@ -12,6 +12,7 @@ export default defineConfig({
     "edge-classify": "src/edge-classify.ts",
     "pseudonym-core": "src/pseudonym-core.ts",
     statements: "src/statements.ts",
+    "tool-catalog": "src/tool-catalog.ts",
     "policy/taxonomy": "src/policy/taxonomy.ts",
     "crypto/jcs": "src/crypto/jcs.ts",
     "crypto/hash": "src/crypto/hash.ts",

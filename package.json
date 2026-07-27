@@ -1,7 +1,7 @@
 {
   "name": "@theonaai/heron-sdk",
-  "version": "0.9.0",
-  "description": "Heron vendor SDK — one hook before a tool call, one signed statement after. Framework-agnostic guard + declarative reduction, no server dependencies.",
+  "version": "0.10.0",
+  "description": "Heron vendor SDK \u2014 one hook before a tool call, one signed statement after. Framework-agnostic guard + declarative reduction, no server dependencies.",
   "license": "Apache-2.0",
   "type": "module",
   "sideEffects": false,
@@ -30,6 +30,11 @@
       "types": "./dist/statements.d.ts",
       "import": "./dist/statements.js",
       "require": "./dist/statements.cjs"
+    },
+    "./tool-catalog": {
+      "types": "./dist/tool-catalog.d.ts",
+      "import": "./dist/tool-catalog.js",
+      "require": "./dist/tool-catalog.cjs"
     },
     "./policy/taxonomy": {
       "types": "./dist/policy/taxonomy.d.ts",
