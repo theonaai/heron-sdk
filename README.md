@@ -240,6 +240,38 @@ not compile. Each key's `derivable` field says whether Heron can fall back to de
 tool name (`"full"`/`"partial"`) or whether the fact is pinned to your side (`"none"` — a recipient, a
 human's approval). See the trust-boundary notes in the Heron repo.
 
+### A key can name a group, not just a tool
+
+A platform does not have twelve tools. The first production window of the first integration carried
+**228 distinct tools and not one declared `data_class`** — the dimension that decides the credential,
+money and personal-data rules. Not because the vendor disagreed with any of them: because saying it
+meant writing 228 contracts. So a key is any of four things, and the last three cover a fleet:
+
+```ts
+const contracts: ContractMap = {
+  "gmail.send": { keep: ["subject"] },                              // one tool, exactly
+  "ATTIO_*": { signals: () => ({ data_class: "personal" }) },       // a glob over tool names
+  "server:stripe": { signals: () => ({ data_class: "financial" }) },// everything on that server
+  "provider:composio": { keep: [] },                                // everything from that provider
+};
+```
+
+Resolution is by specificity — exact name, then the glob with more literal characters, then
+`server:`, then `provider:` — and **never** by the order you wrote the keys in: a signal is signed
+testimony, and "it depended on which key came first" is not an answer you can give a reviewer. The
+merge is per *field*, so `"ATTIO_CREATE_RECORD": { keep: [...] }` beside `"ATTIO_*": { signals }`
+keeps the group's signals on that tool. Allowlists are never unioned: the most specific `keep` wins
+whole, so a wide key can never widen what leaves your boundary. `resolveContract(call, contracts)` is
+exported if you want to see what a call resolves to.
+
+**What you are signing.** A signal crosses as `declared` — your testimony, pinned by `args_hash` —
+and `declared` *overrides* Heron's own derivation. `"ATTIO_*": { data_class: "personal" }` asserts a
+fact about your integration that Heron cannot see, which is exactly what the vocabulary is for. What
+it is not is a cheaper way to look well-classified: a wide key declaring a class you have not checked
+is a signed falsehood, it takes those calls out of the rules that would have caught them, and the
+evidence page reports it as vendor-asserted. Narrow keys you can defend beat one key that covers
+everything.
+
 ## The reference edge classifier — the signals you do not have to write
 
 Most of the `signals` above are mechanical: how many recipients, how many records, whether an address
@@ -260,6 +292,21 @@ const guard = await openGuardedSession({
 });
 ```
 
+**If you are multi-tenant, `internalDomains` is a function.** "Inside" belongs to the customer whose
+agent is running, not to your process. One global list declares your own staff internal to somebody
+else's agent — and since the signal crosses as `declared`, that is a signed falsehood which *also*
+drops the call out of the external-send rule that would otherwise have caught even `unknown`:
+
+```ts
+edge: {
+  internalDomains: (ctx) => perimeterFor(ctx.principal?.ref),   // undefined ⇒ nothing is claimed
+}
+```
+
+The context carries the tool, provider, server, principal and session id — everything the guard
+already knows, none of which crosses the boundary because of this. Returning `undefined` for a tenant
+you cannot resolve is the right answer: an `unknown` a reviewer can see beats a guess they cannot.
+
 It used to be opt-in, and the first integration reasonably left it off — the only setting anyone
 reads about is `internalDomains`, that one genuinely does not generalise across a multi-tenant
 platform, and so the whole classifier stayed dark. The result was `magnitude: unknown` on every
@@ -269,7 +316,15 @@ It then fills `recipient_count`, `record_count`, `recipient_external` and `amoun
 argument keys (`to` / `cc` / `bcc` / `recipients`, `ids` / `records` / `items`, and for money only
 unambiguous names — `amount` / `amount_minor` / `total_amount` / `price`, never a bare `value` or
 `total`, which are ordinary words for ordinary arguments),
-which you can redirect with `fields`. A tool's own `contract.signals` always wins — the classifier
+which you can redirect with `fields`.
+
+Those keys are looked for **wherever they are**, not only at the top level: through a tool bus's
+envelope (`{ params: { to: … } }`), through a message object, and through the objects in a batch, so
+a list of messages each with its own recipient counts as the recipients it has. Reading only the top
+level was measured against a real window and emitted a signal on 0.8% of calls — the keys were there,
+nothing looked at them. A value found at a key is the answer for that key and is never descended into
+as well, so a recipient list is counted once; depth and total nodes are bounded, because this runs on
+the path of every tool call. A tool's own `contract.signals` always wins — the classifier
 only fills what you left out — and `classifyAtEdge(args, options)` is exported if you would rather
 call it yourself.
 
@@ -288,7 +343,7 @@ stays yours.
 The root export carries the vendor surface:
 
 - `HeronClient`, `HeronUnavailableError`, `mayExecute`, `hashResult` — transport and the honour rule.
-- `openGuardedSession`, `reduce`, `defineContract`, `derivedSessionStore`, `memorySessionStore` — the guard layer.
+- `openGuardedSession`, `reduce`, `resolveContract`, `defineContract`, `derivedSessionStore`, `memorySessionStore` — the guard layer.
 - `SIGNAL_KEYS`, `SIGNAL_KEY_LIST`, `SignalKey` — the signal vocabulary.
 - `classifyAtEdge`, `EdgeClassifierOptions` — the reference classifier over a call's arguments.
 - `pseudonymWith`, `replaceAnchors`, `collectAnchors`, `ANCHOR_PATTERNS`, `AnchorType` — edge tokenisation.

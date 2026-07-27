@@ -108,6 +108,34 @@ export interface ToolContract<A = Record<string, unknown>> {
   signals?: (ctx: ReductionCtx<A>) => Signals;
 }
 
+/**
+ * Contracts, keyed by what they apply to.
+ *
+ * A key is one of four things, and the first is the only one that was ever available:
+ *
+ *   "gmail.send"          one tool, by its exact name
+ *   "ATTIO_*"             a glob over tool names — `*` matches any run of characters
+ *   "server:attio"        every call this vendor resolved to that server
+ *   "provider:composio"   every call this vendor resolved to that provider
+ *
+ * The three group forms exist because the exact-name form does not survive contact with a platform.
+ * The first production window of the first integration carried 228 distinct tools and **not one
+ * declared `data_class`** — the dimension that decides `heron.credential.deny`, `heron.money.deny`
+ * and `heron.personal.step_up`. Not because the vendor disagreed: because the only way to say it was
+ * to write 228 contracts, and nobody writes 228 contracts. The rule Heron could not derive was
+ * therefore never asserted by anyone, and 95% of that traffic was allowed on our ignorance rather
+ * than on anybody's judgement.
+ *
+ * **What a group key means, stated plainly, because it is what you are signing.** A signal crosses as
+ * `declared` — the vendor's testimony, pinned by `args_hash` — and `declared` *overrides* Heron's own
+ * derivation. Writing `"ATTIO_*": { signals: () => ({ data_class: "personal" }) }` asserts a fact
+ * about your integration: that every call this matches touches personal data. That is a thing you
+ * know and Heron cannot see, which is exactly what the signal vocabulary is for. What it is not is a
+ * cheaper way to look well-classified: a wide key that declares a class you have not checked is a
+ * signed falsehood, it will silently take calls out of the rules that would have caught them, and
+ * `tallySignalSources()` on the evidence page will report it as vendor-asserted. Narrow keys you can
+ * defend beat one key that covers everything.
+ */
 export type ContractMap = Record<string, ToolContract>;
 
 /**
@@ -128,6 +156,72 @@ export type ContractMap = Record<string, ToolContract>;
  */
 export function defineContract<A>(contract: ToolContract<A>): ToolContract {
   return contract as ToolContract;
+}
+
+/**
+ * How specific a key is. Higher wins, and the order is the only thing that makes the result
+ * predictable: two keys that both match must never resolve by which one was typed first, because a
+ * signal is a signed statement and "it depended on the object literal's key order" is not something
+ * a vendor can answer for.
+ */
+function specificity(key: string, call: { name: string; provider?: string; server?: string }): number | null {
+  if (key === call.name) return 4;
+  if (key.startsWith("server:")) return call.server && key.slice(7) === call.server ? 2 : null;
+  if (key.startsWith("provider:")) return call.provider && key.slice(9) === call.provider ? 1 : null;
+  if (!key.includes("*")) return null;
+  const pattern = new RegExp(`^${key.split("*").map(escapeRegExp).join(".*")}$`);
+  return pattern.test(call.name) ? 3 : null;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** Literal characters in a glob — the tiebreak between two globs that both match. */
+function literals(key: string): number {
+  return key.replace(/\*/g, "").length;
+}
+
+/**
+ * The contract that governs one call, assembled from every key that matches it.
+ *
+ * Merged **per field**, not per contract, and that choice is the whole design. Letting the most
+ * specific match win outright reads well until a vendor adds `"ATTIO_CREATE_RECORD": { keep: [...] }`
+ * beside `"ATTIO_*": { signals: … }` and silently loses the group's `data_class` on that one tool —
+ * a signal disappearing because an unrelated field was added elsewhere is the kind of failure nobody
+ * finds until a reviewer asks why one call in a thousand was classified differently. Merging the
+ * *contents* of a field would be worse: `keep` is an allowlist, and a union of allowlists means a
+ * wide key can add a field to what leaves the boundary, which is invariant #6 defeated by
+ * convenience.
+ *
+ * So: for each of `keep`, `anchors` and `signals`, the most specific key that defines it wins, whole.
+ * Exact name > glob (more literal characters first) > `server:` > `provider:`, and equal specificity
+ * is broken by the key's own ordering so the answer never depends on how the map was written.
+ *
+ * Linear in the number of *contracts*, which is the point of group keys: a platform with 2000 tools
+ * writes a dozen of these, not two thousand.
+ */
+export function resolveContract(
+  call: { name: string; provider?: string; server?: string },
+  contracts: ContractMap,
+): ToolContract {
+  const matches: Array<{ contract: ToolContract; rank: number; key: string }> = [];
+  for (const [key, contract] of Object.entries(contracts)) {
+    const rank = specificity(key, call);
+    if (rank !== null) matches.push({ contract, rank, key });
+  }
+  if (matches.length === 0) return {};
+  if (matches.length === 1) return matches[0]!.contract;
+
+  matches.sort(
+    (a, b) => b.rank - a.rank || literals(b.key) - literals(a.key) || a.key.localeCompare(b.key),
+  );
+
+  return {
+    keep: matches.find((m) => m.contract.keep !== undefined)?.contract.keep,
+    anchors: matches.find((m) => m.contract.anchors !== undefined)?.contract.anchors,
+    signals: matches.find((m) => m.contract.signals !== undefined)?.contract.signals,
+  };
 }
 
 export interface GuardedTool {
@@ -476,12 +570,21 @@ export async function openGuardedSession(opts: GuardOptions): Promise<GuardedSes
     extra?: Signals,
     callRef?: string,
   ): Promise<BeforeActionResult> {
-    const contract = opts.contracts[call.name] ?? {};
+    const contract = resolveContract(call, opts.contracts);
     const argsRedacted = reduce(call.args, contract, anchor);
     // Precedence, widest to narrowest: the reference classifier reads the arguments, the tool's own
     // contract overrides it (a vendor knows its own call better than a generic library), and the
     // step-up keys come last because they describe *this* submission, not the call.
-    const derived = opts.edge === false ? {} : classifyAtEdge(call.args, opts.edge ?? {});
+    const derived =
+      opts.edge === false
+        ? {}
+        : classifyAtEdge(call.args, opts.edge ?? {}, {
+            tool: call.name,
+            provider: call.provider,
+            server: call.server,
+            principal: opts.principal,
+            sessionExternalId: opts.sessionExternalId,
+          });
     const base = contract.signals?.({ args: call.args, request: opts.request, anchor }) ?? {};
     // Merged as a plain map, not as `Signals`: the approval keys are a union there, and merging two
     // of its branches is exactly the thing the union forbids at a call site. Each contributor was
