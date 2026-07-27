@@ -100,7 +100,13 @@ export const SIGNAL_KEYS = {
     feeds: "reversibility",
     type: "boolean",
     derivable: "partial",
-    note: "Heron derives a default per operation (a send is terminal, a read reversible); this overrides it for the cases the heuristic gets wrong.",
+    note: "Heron derives a default per operation (a send is terminal, a read reversible); this overrides it for the cases the heuristic gets wrong. Two-valued, so it cannot say `costly` — use `reversibility` where the honest answer is the middle one.",
+  },
+  reversibility: {
+    feeds: "reversibility",
+    type: "string",
+    derivable: "partial",
+    note: "The dimension in full: `reversible` | `costly` | `terminal`. `costly` is the value `reversible` cannot express — recovery exists but is not an undo (a record the agent can regenerate, a file restorable from a backup). Without it, a vendor whose delete is recoverable-at-a-cost must either overclaim `true` or accept `terminal`, and the rule that allows a recoverable delete is unreachable by declaration. Wins over `reversible` when both are sent.",
   },
   resolves_action: {
     feeds: "approval",
