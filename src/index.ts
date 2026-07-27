@@ -62,6 +62,7 @@ export type { SignalKey, SignalSpec, SignalType, Derivable } from "./contract";
 export { classifyAtEdge } from "./edge-classify";
 export type {
   EdgeClassifierOptions,
+  EdgeContext,
   EdgeFields,
   EdgeSignals,
 } from "./edge-classify";

@@ -575,7 +575,16 @@ export async function openGuardedSession(opts: GuardOptions): Promise<GuardedSes
     // Precedence, widest to narrowest: the reference classifier reads the arguments, the tool's own
     // contract overrides it (a vendor knows its own call better than a generic library), and the
     // step-up keys come last because they describe *this* submission, not the call.
-    const derived = opts.edge === false ? {} : classifyAtEdge(call.args, opts.edge ?? {});
+    const derived =
+      opts.edge === false
+        ? {}
+        : classifyAtEdge(call.args, opts.edge ?? {}, {
+            tool: call.name,
+            provider: call.provider,
+            server: call.server,
+            principal: opts.principal,
+            sessionExternalId: opts.sessionExternalId,
+          });
     const base = contract.signals?.({ args: call.args, request: opts.request, anchor }) ?? {};
     // Merged as a plain map, not as `Signals`: the approval keys are a union there, and merging two
     // of its branches is exactly the thing the union forbids at a call site. Each contributor was

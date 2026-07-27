@@ -49,13 +49,39 @@ export interface EdgeFields {
   amount?: string[];
 }
 
+/**
+ * What the guard knows about the call being classified, for a perimeter that is not global.
+ *
+ * Everything here is already on the vendor's side of the boundary and none of it crosses because of
+ * this type: it exists so `internalDomains` can be answered per call rather than per process.
+ */
+export interface EdgeContext {
+  tool: string;
+  provider?: string;
+  server?: string;
+  /** The principal the guard was opened for — opaque, as invariant #6 requires. */
+  principal?: { type: string; ref: string };
+  sessionExternalId?: string;
+}
+
 export interface EdgeClassifierOptions {
   /**
    * Domains that count as inside the boundary, e.g. `["acme.example"]`. Without it
    * `recipient_external` is not emitted at all: "external" is a fact about *your* perimeter, and
    * guessing it would be worse than the `unknown` the reviewer currently sees.
+   *
+   * **A function, when "inside" is not a property of your process.** On a multi-tenant platform the
+   * perimeter belongs to the *customer* whose agent is running, not to the vendor: one global list
+   * declares the vendor's own staff internal to somebody else's agent, and because
+   * `classifyDestination` records the signal as `declared`, that wrong `internal` is a signed
+   * falsehood which also drops the call out of the external-send rule that would otherwise have
+   * caught even `unknown`. This was the reason the first integration left the whole classifier off,
+   * so it cost far more than the one dimension it belongs to.
+   *
+   * Return `undefined` (or an empty array) for a call whose tenant you cannot resolve, and nothing
+   * is claimed — the same honest `unknown` as having no perimeter at all.
    */
-  internalDomains?: string[];
+  internalDomains?: string[] | ((context: EdgeContext) => string[] | undefined);
   /**
    * Whether the values in the `amount` fields are already in minor units, as `SIGNAL_KEYS.amount`
    * requires. There is no safe default — `12.50` and `1250` are the same money in different units,
@@ -114,9 +140,61 @@ function countRecipients(value: unknown): number {
   return value.trim().length > 0 ? 1 : 0;
 }
 
+/**
+ * How deep to look for the conventional keys, and how much of a call to walk doing it.
+ *
+ * Reading only the top level was measured, not assumed: over a 30-day production window the guard
+ * emitted a signal on **0.8%** of calls, because a platform's arguments are nested — a tool bus
+ * wraps them (`{ params: { … } }`), a message carries its own envelope (`{ message: { to: … } }`),
+ * and a batch is a list of objects each with a recipient. The keys were there; nothing looked at
+ * them.
+ *
+ * The depth is bounded because this runs on the path of every tool call, and the node budget bounds
+ * the pathological case a depth limit alone does not — a wide object at depth 1. Both are limits on
+ * *our* work, never on what is claimed: reaching either stops the walk, and an unfound key is simply
+ * not emitted, which is the same honest `unknown` as before.
+ */
+const MAX_DEPTH = 4;
+const MAX_NODES = 1000;
+
+/**
+ * Every value stored under one of `keys`, anywhere within the depth limit.
+ *
+ * Descends through plain objects and through the objects inside arrays — a batch of messages is the
+ * ordinary shape for the very facts this classifier exists to count — but never treats an array
+ * *found at a key* as something to descend into for that same key: `{ to: ["a", "b"] }` is two
+ * recipients, counted by the caller, not a container to search for more `to`s.
+ */
+function valuesAt(root: unknown, keys: string[]): unknown[] {
+  const found: unknown[] = [];
+  let budget = MAX_NODES;
+
+  const walk = (node: unknown, depth: number): void => {
+    if (budget <= 0 || depth > MAX_DEPTH || node === null || typeof node !== "object") return;
+    budget -= 1;
+
+    if (Array.isArray(node)) {
+      for (const item of node) walk(item, depth + 1);
+      return;
+    }
+
+    for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+      if (keys.includes(key)) {
+        found.push(value);
+        // Not descended into: the value *is* the answer for this key. Descending would count a
+        // recipient list twice — once as a list, once as its items.
+        continue;
+      }
+      walk(value, depth + 1);
+    }
+  };
+
+  walk(root, 0);
+  return found;
+}
+
 function firstNumber(args: Record<string, unknown>, keys: string[]): number | null {
-  for (const key of keys) {
-    const value = args[key];
+  for (const value of valuesAt(args, keys)) {
     if (typeof value === "number" && Number.isFinite(value)) return value;
     if (typeof value === "string" && value.trim() !== "") {
       const parsed = Number(value);
@@ -135,28 +213,31 @@ function firstNumber(args: Record<string, unknown>, keys: string[]): number | nu
 export function classifyAtEdge(
   args: Record<string, unknown>,
   options: EdgeClassifierOptions = {},
+  context: EdgeContext = { tool: "" },
 ): EdgeSignals {
   const fields = { ...DEFAULT_FIELDS, ...options.fields };
   const signals: EdgeSignals = {};
+  const recipientValues = valuesAt(args, fields.recipients);
 
-  const recipients = fields.recipients.reduce(
-    (sum, key) => sum + (key in args ? countRecipients(args[key]) : 0),
-    0,
-  );
+  const recipients = recipientValues.reduce<number>((sum, value) => sum + countRecipients(value), 0);
   if (recipients > 0) signals.recipient_count = recipients;
 
-  const records = fields.records.reduce(
-    (sum, key) => sum + (Array.isArray(args[key]) ? (args[key] as unknown[]).length : 0),
+  const records = valuesAt(args, fields.records).reduce<number>(
+    (sum, value) => sum + (Array.isArray(value) ? value.length : 0),
     0,
   );
   if (records > 0) signals.record_count = records;
 
   // Only with a perimeter to compare against, and only over addresses we can actually read: a
   // recipient list of opaque user ids says nothing about which side of the boundary they sit on.
-  if (options.internalDomains && options.internalDomains.length > 0) {
-    const addresses = fields.recipients.flatMap((key) => emailsIn(args[key]));
+  const perimeter =
+    typeof options.internalDomains === "function"
+      ? options.internalDomains(context)
+      : options.internalDomains;
+  if (perimeter && perimeter.length > 0) {
+    const addresses = recipientValues.flatMap(emailsIn);
     if (addresses.length > 0) {
-      const internal = options.internalDomains.map((d) => d.toLowerCase().replace(/^@/, ""));
+      const internal = perimeter.map((d) => d.toLowerCase().replace(/^@/, ""));
       signals.recipient_external = addresses.some((address) => {
         const domain = address.split("@").pop()?.toLowerCase() ?? "";
         return !internal.some((d) => domain === d || domain.endsWith(`.${d}`));

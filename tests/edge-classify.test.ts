@@ -178,3 +178,82 @@ describe("the line it must not cross", () => {
     expect(signals).not.toHaveProperty("resolves_action");
   });
 });
+
+describe("it finds the keys where a platform actually puts them", () => {
+  // Measured, not assumed: over a 30-day production window the guard emitted a signal on 0.8% of
+  // calls. The conventional keys were there — one level down, inside a tool bus's envelope or a
+  // message object — and nothing looked at them.
+  it("reads through an envelope", () => {
+    expect(classifyAtEdge({ params: { to: ["a@x.example", "b@y.example"] } })).toEqual({
+      recipient_count: 2,
+    });
+  });
+
+  it("counts recipients across a batch of objects", () => {
+    // A list of messages, each with its own recipient, is the ordinary shape for exactly the fact
+    // this classifier exists to count.
+    expect(
+      classifyAtEdge({ messages: [{ to: "a@x.example" }, { to: "b@y.example" }] }),
+    ).toEqual({ recipient_count: 2 });
+  });
+
+  it("does not count a recipient list twice", () => {
+    // The value found at a key is the answer for that key. Descending into it as well would count
+    // the list once and its items again — a doubled `recipient_count` moves a call across the bulk
+    // threshold, and a declared signal overrides Heron's derivation, so a wrong one is worse than
+    // the `unknown` it replaces.
+    expect(classifyAtEdge({ to: ["a@x.example", "b@y.example"] })).toEqual({ recipient_count: 2 });
+  });
+
+  it("finds records and an amount below the top level", () => {
+    expect(
+      classifyAtEdge({ body: { ids: [1, 2, 3] }, payment: { amount: 2500 } }, { amountInMinorUnits: true }),
+    ).toEqual({ record_count: 3, amount: 2500 });
+  });
+
+  it("stops before it can be made to walk an arbitrary structure", () => {
+    // The depth bound is a limit on our work on the hot path, never on what may be claimed: past it
+    // the key is simply not found, which is the same honest silence as an argument that never had it.
+    const deep = { a: { b: { c: { d: { e: { to: "buried@x.example" } } } } } };
+    expect(classifyAtEdge(deep)).toEqual({});
+  });
+});
+
+describe("a perimeter that is not a property of the process", () => {
+  const call = { to: "someone@customer.example" };
+
+  it("resolves the perimeter per call, from the context the guard passes", () => {
+    // On a multi-tenant platform "internal" belongs to the customer whose agent is running, not to
+    // the vendor. One global list declares the vendor's own staff internal to somebody else's agent
+    // — and since the signal crosses as `declared`, that is a signed falsehood which also drops the
+    // call out of the external-send rule that would otherwise have caught even `unknown`.
+    const perimeters: Record<string, string[]> = {
+      "tenant-a": ["customer.example"],
+      "tenant-b": ["other.example"],
+    };
+    const internalDomains = (ctx: { principal?: { ref: string } }) =>
+      perimeters[ctx.principal?.ref ?? ""];
+
+    expect(
+      classifyAtEdge(call, { internalDomains }, { tool: "gmail.send", principal: { type: "human", ref: "tenant-a" } }),
+    ).toEqual({ recipient_count: 1, recipient_external: false });
+
+    expect(
+      classifyAtEdge(call, { internalDomains }, { tool: "gmail.send", principal: { type: "human", ref: "tenant-b" } }),
+    ).toEqual({ recipient_count: 1, recipient_external: true });
+  });
+
+  it("claims nothing for a tenant it cannot resolve", () => {
+    // `undefined` is the answer for "I do not know whose perimeter applies", and it must read as
+    // silence rather than as "external": an unknown Heron can see beats a guess it cannot.
+    const signals = classifyAtEdge(call, { internalDomains: () => undefined }, { tool: "gmail.send" });
+    expect(signals).toEqual({ recipient_count: 1 });
+  });
+
+  it("still accepts a plain list for a single-tenant vendor", () => {
+    expect(classifyAtEdge(call, { internalDomains: ["customer.example"] })).toEqual({
+      recipient_count: 1,
+      recipient_external: false,
+    });
+  });
+});
