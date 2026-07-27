@@ -27,6 +27,7 @@ export type {
 export {
   openGuardedSession,
   reduce,
+  resolveContract,
   defineContract,
   derivedSessionStore,
   memorySessionStore,
