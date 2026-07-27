@@ -45,11 +45,18 @@ export type Confidence = "high" | "medium" | "low";
  * is published in the classification so a reviewer can size the gap: N verdicts rested on a tool
  * name, M on a signal the vendor computed.
  *
- *   - "declared" — the vendor sent a signal that set it directly.
- *   - "derived"  — we inferred it from the tool name / the operation (our guess).
- *   - "unknown"  — we could not determine it at all.
+ *   - "declared"   — the vendor sent a signal on *this call* that set it directly.
+ *   - "catalogued" — the vendor's signed tool catalogue says this is what the *tool* does.
+ *   - "derived"    — we inferred it from the tool name / the operation (our guess).
+ *   - "unknown"    — we could not determine it at all.
+ *
+ * `catalogued` is its own value rather than either neighbour, and collapsing it into one of them
+ * would hide the distinction this field exists to publish. It is signed, so `derived` — which reads
+ * as "Heron guessed from a string the audited party chose" — understates it. But it describes a
+ * tool, not this call: a catalogue entry cannot know that *this* invocation sent to an external
+ * recipient, so `declared` overstates it.
  */
-export type Source = "declared" | "derived" | "unknown";
+export type Source = "declared" | "catalogued" | "derived" | "unknown";
 
 export interface Dimension<T> {
   value: T;
@@ -112,9 +119,16 @@ export const DIMENSIONS = [
 
 export type DimensionKey = (typeof DIMENSIONS)[number];
 
-/** Ranks a source so a rule can require a minimum: declared > derived > unknown. */
+/**
+ * Ranks a source so a rule can require a minimum: declared > catalogued > derived > unknown.
+ *
+ * The numbers are ordinals for comparison only — they are never stored, published or hashed, which
+ * is what makes inserting a value in the middle safe: no sealed classification carries a rank, so
+ * renumbering `declared` cannot change how an old bundle reproduces.
+ */
 export function sourceRank(source: Source): number {
-  if (source === "declared") return 2;
+  if (source === "declared") return 3;
+  if (source === "catalogued") return 2;
   if (source === "derived") return 1;
   return 0;
 }
