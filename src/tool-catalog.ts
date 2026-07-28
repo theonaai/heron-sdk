@@ -1,6 +1,6 @@
 import type { SignalKey } from "./contract";
 import { hashCanonical } from "./crypto/hash";
-import type { DataClass, Destination, Operation } from "./policy/taxonomy";
+import type { DataClass, Destination, Operation, Reversibility } from "./policy/taxonomy";
 
 /**
  * The tool catalogue — the vendor's signed statement of what its tools *are*.
@@ -44,6 +44,7 @@ export const CATALOG_SIGNAL_KEYS = [
   "data_class",
   "destination",
   "reversible",
+  "reversibility",
 ] as const satisfies readonly SignalKey[];
 
 export type CatalogSignalKey = (typeof CATALOG_SIGNAL_KEYS)[number];
@@ -58,7 +59,9 @@ export interface CatalogSignals {
   op?: Exclude<Operation, "unknown">;
   data_class?: Exclude<DataClass, "unknown">;
   destination?: Exclude<Destination, "unknown">;
+  /** Two-valued shorthand. Where the honest answer is `costly`, use `reversibility`. */
   reversible?: boolean;
+  reversibility?: Exclude<Reversibility, "unknown">;
 }
 
 export interface CatalogEntry {
@@ -78,7 +81,7 @@ export interface ToolCatalog {
 }
 
 /**
- * Canonicalise a catalogue: sort the tools by name, keep only the four catalogue keys, drop absent
+ * Canonicalise a catalogue: sort the tools by name, keep only the catalogue keys, drop absent
  * optionals.
  *
  * The hash is what the vendor signs and what a reviewer compares against, so two statements of the

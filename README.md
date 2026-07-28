@@ -396,6 +396,10 @@ Three rules worth knowing before you write one:
 
 - **Only facts that are constant for the tool.** A recipient count or an amount belongs to a call.
   `destination` is allowed because for many tools it genuinely is constant — state it where it is.
+- **Reversibility has three values, not two.** `reversible: true|false` is the shorthand; where the
+  honest answer is the middle one — recovery exists but is not an undo, like a record your agent
+  regenerates or a file behind a backup — send `reversibility: "costly"`. Claiming `true` for that
+  case overstates, and accepting `terminal` collects a verdict you did not earn.
 - **An empty entry is legal, and it is not the same as silence.** Listing a tool and stating nothing
   says you have no constant fact to offer; leaving it out says your enumeration missed it. The
   evidence page shows those separately, and only the second is a bug.

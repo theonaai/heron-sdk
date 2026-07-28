@@ -56,6 +56,18 @@ describe("buildToolCatalog", () => {
     expect(catalog.tools).toEqual([{ name: "a.tool", signals: {} }]);
   });
 
+  it("can say a delete is recoverable without claiming it is undoable", () => {
+    // The value `reversible` cannot express. Without it a vendor whose delete is recoverable at a
+    // cost — a record their agent regenerates, a file behind a backup — must either overclaim
+    // `true` or accept `terminal`, and the rule that allows a recoverable delete is unreachable by
+    // declaration. A vocabulary that punishes the honest answer teaches vendors to stop answering.
+    const [entry] = buildToolCatalog([
+      { name: "recommendations_delete", signals: { op: "delete", reversibility: "costly" } },
+    ]).tools;
+
+    expect(entry?.signals).toEqual({ op: "delete", reversibility: "costly" });
+  });
+
   it("carries only facts that are properties of the tool", () => {
     // A recipient count, an amount and a human's approval are facts about one *call*. Stating them
     // for a tool would assert them for every call it ever serves.
