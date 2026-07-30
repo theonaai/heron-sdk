@@ -457,7 +457,20 @@ export interface GuardOptions {
  * here would be the same thing, unpublished.
  */
 export type GuardDecision =
-  | { kind: "run"; actionId: string; decisionId: string; verdict: string }
+  | {
+      kind: "run";
+      actionId: string;
+      decisionId: string;
+      verdict: string;
+      /**
+       * Set when the call runs because the project is in a declared shadow window
+       * (`decision.effect: "advisory"`) and *not* because the verdict allowed it. The call goes
+       * ahead and the execution is published as a rehearsal — but a `DENY` was still recorded
+       * against it, so this is the flag worth logging: it is the list of things that would have
+       * stopped once the vendor declares enforcement.
+       */
+      rehearsed?: true;
+    }
   | {
       kind: "blocked";
       verdict: string;
@@ -611,8 +624,15 @@ export async function openGuardedSession(opts: GuardOptions): Promise<GuardedSes
   function interpret(before: BeforeActionResult): GuardDecision {
     const ids = { actionId: before.action_id, decisionId: before.decision.decision_id };
     const verdict = before.decision.verdict;
+    const effect = before.decision.effect;
 
     if (mayExecute(verdict)) return { kind: "run", verdict, ...ids };
+    // Everything below this line is a verdict that does not run — unless Heron has told us, in this
+    // decision, that the project is rehearsing. Read from the answer rather than from a setting of
+    // ours: a runtime that decided its own posture would report shadow truthfully on every call and
+    // there would be no breach to find, which is why the declaration lives on Heron's side and
+    // arrives here signed. An unreachable Heron says nothing at all, so it still fails closed.
+    if (effect === "advisory") return { kind: "run", verdict, rehearsed: true, ...ids };
     if (verdict === "STEP_UP") return { kind: "step_up", ...ids };
     // MODIFY and DEFER are answers about what to submit *next*, not about waiting for a person.
     // Collapsing them into the step-up path — which is what treating "not ALLOW and not DENY" as a

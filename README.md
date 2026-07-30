@@ -349,6 +349,8 @@ stays yours.
 The root export carries the vendor surface:
 
 - `HeronClient`, `HeronUnavailableError`, `mayExecute`, `hashResult` — transport and the honour rule.
+  `mayExecute(verdict, effect?)` takes the decision's `effect`, so a declared shadow window runs the
+  call without the vendor keeping a switch of its own (below).
 - `openGuardedSession`, `reduce`, `resolveContract`, `defineContract`, `derivedSessionStore`, `memorySessionStore` — the guard layer.
 - `SIGNAL_KEYS`, `SIGNAL_KEY_LIST`, `SignalKey` — the signal vocabulary.
 - `classifyAtEdge`, `EdgeClassifierOptions` — the reference classifier over a call's arguments.
@@ -368,6 +370,38 @@ import { signCanonical, verifyCanonical } from "@theonaai/heron-sdk/crypto/ed255
 
 Also exported as subpaths: `@theonaai/heron-sdk/contract`, `.../edge-classify`, `.../pseudonym-core`,
 `.../statements`, `.../tool-catalog`, `.../policy/taxonomy`.
+
+## Shadow windows are told to you, not configured here
+
+A `decision` carries `effect` beside its `verdict`:
+
+- `"enforced"` — honour the verdict before executing. This is the default and the only reading of a
+  missing field, so a Heron older than the field, or an answer that never arrived, behaves exactly as
+  it always did.
+- `"advisory"` — the project has declared a shadow window on Heron's side. Run the call anyway and
+  report what happened; the execution is published as a **rehearsal**, not as a breach.
+
+`openGuardedSession` already does this for you: an advisory decision comes back as
+`{ kind: "run", rehearsed: true }`, and the flag is worth logging — it is the list of calls that will
+stop the day the vendor declares enforcement. If you call `mayExecute` directly, pass the effect:
+
+```ts
+if (mayExecute(before.decision.verdict, before.decision.effect)) {
+  await runTheTool()
+}
+```
+
+**Do not keep a shadow switch of your own.** It was the obvious design and it has a failure mode we
+have now watched happen: a deployment held the right value in its own environment variable, never
+declared the same thing in Heron, and its evidence page published 576 rehearsals as breaches of a
+promise nobody had made. The declaration has to live where it cannot be made by the runtime being
+checked — a runtime in shadow would declare shadow, truthfully, on every call, and there would be no
+breach left to find. So it is an operator's statement in Heron, dated and signed into every decision
+receipt as `enforcement.effect`, and this field is how it reaches you.
+
+Being *told* a verdict is advisory is a signed statement about one action. Not being able to ask is
+nothing at all, and the two must never converge: with no answer there is no effect, and the guard
+fails closed exactly as before. There is still no fail-open switch in this SDK.
 
 ## The tool catalogue — what your tools are, as opposed to what one call did
 
