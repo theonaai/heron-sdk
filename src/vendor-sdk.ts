@@ -67,6 +67,21 @@ export interface BeforeActionResult {
     transform?: { note: string; narrow_destination_to?: string; reduce_magnitude_to?: string };
     /** On a DEFER: the prior context the edge must establish before re-submitting. */
     pending?: { prior_operation?: string[]; prior_read_of_data_class?: boolean };
+    /**
+     * What to do with the verdict: `enforced` — honour it before executing; `advisory` — the project
+     * has declared a shadow window on Heron's side, so record the verdict and run anyway. The
+     * execution you report is then published as a rehearsal rather than as a breach.
+     *
+     * Read this instead of carrying a shadow switch of your own. The mode is declared by an operator
+     * in Heron, dated and signed into the decision receipt (`enforcement.effect`), because a runtime
+     * that decided its own posture would declare shadow truthfully on every call and leave no breach
+     * to find — so the claim cannot come from the code being checked. One fact, one source, and this
+     * is the field that carries it to you.
+     *
+     * Absent on a Heron older than the field, and absent means `enforced`: an SDK that finds nothing
+     * here honours the verdict, which is what it did before there was anything to read.
+     */
+    effect?: "enforced" | "advisory";
   };
   receipt: { id: string; kid: string; alg: string; signature: string };
   chain: { prev_hash: string; record_hash: string };
@@ -110,8 +125,21 @@ export class HeronUnavailableError extends Error {
  *
  * So `mayExecute` is deliberately narrow: run on ALLOW, and for every other verdict the honouring is a
  * *new action*, never running this one. That is what keeps MODIFY and DEFER off the immutability rules.
+ *
+ * The one thing that widens it is `decision.effect: "advisory"` — Heron saying, in the signed receipt,
+ * that this project has declared a shadow window and the verdict is a rehearsal. Passing it here is
+ * how a vendor stops carrying a shadow switch of its own; leaving it out keeps the old behaviour
+ * exactly, because absent means enforced.
  */
-export function mayExecute(verdict: string | undefined | null): boolean {
+export function mayExecute(
+  verdict: string | undefined | null,
+  effect?: "enforced" | "advisory" | null,
+): boolean {
+  // A shadow window is Heron *telling* us, per action and in signed bytes, that this verdict is a
+  // rehearsal — never an assumption we may make. That distinction is the whole reason there is still
+  // no fail-open switch here: no answer at all remains "do not run", because an unreachable Heron
+  // states nothing, and "we could not ask" must never read as "we were told it did not matter".
+  if (effect === "advisory") return true;
   return verdict === "ALLOW";
 }
 
