@@ -353,6 +353,10 @@ The root export carries the vendor surface:
   call without the vendor keeping a switch of its own (below).
 - `openGuardedSession`, `reduce`, `resolveContract`, `defineContract`, `derivedSessionStore`, `memorySessionStore` — the guard layer.
 - `SIGNAL_KEYS`, `SIGNAL_KEY_LIST`, `SignalKey` — the signal vocabulary.
+- `INTENT_PROMPT`, `INTENT_PROMPT_HASH`, `INTENT_PROMPT_VERSION`, `buildIntentQuestion`,
+  `parseIntentAnswer`, `intentSignals`, `stripMeasured` — the fork: the question the SDK owns, and
+  the parsing of what comes back. `session.decideTurn()` drives all of it.
+- `instructionsHash`, `INSTRUCTIONS_SIGNAL` — the commitment to your agent's governing text.
 - `classifyAtEdge`, `EdgeClassifierOptions` — the reference classifier over a call's arguments.
 - `pseudonymWith`, `replaceAnchors`, `collectAnchors`, `ANCHOR_PATTERNS`, `AnchorType` — edge tokenisation.
 - `buildExecutionEvidencePayload`, `ExecutionEvidencePayload` — the statement you sign.
@@ -449,7 +453,55 @@ as `declared` — a fact you computed.
 A model's answer is not that, and sending it as `declared` would be the one substitution this
 package cannot undo. The source is sealed into the published classification and the classification is
 immutable, so a reviewer who cannot separate them today cannot separate them a year of receipts
-later. Mark it, and Heron publishes those dimensions as `inferred` instead:
+later. Mark it, and Heron publishes those dimensions as `inferred` instead.
+
+### The fork — ask your own model, and let the SDK own the question
+
+The cheapest judge with the full context is the agent itself. Configure `intent` and decide a whole
+model turn at once: the SDK composes the question, you fork your live session — same agent, same
+model — and hand back the raw answer.
+
+```ts
+import { openGuardedSession } from "@theonaai/heron-sdk"
+
+const session = await openGuardedSession({
+  // …the usual options
+  intent: {
+    model: "claude-sonnet-5",
+    slice: "last_turn",
+    // Fork the session and put the SDK's question to it. Return the reply, or null to skip.
+    ask: async ({ prompt }) => forkThisSession().complete(prompt),
+  },
+})
+
+// One completion for the whole turn, then each call carries the claim about itself.
+const decisions = await session.decideTurn(calls)
+```
+
+**The question is ours, and that is the point.** `INTENT_PROMPT` is a constant in this package, not a
+string assembled from your agent's system prompt, and `INTENT_PROMPT_HASH` travels on every claim —
+so a reviewer holding a receipt can look up exactly what was asked, from one published value. A judge
+that shares the attacker's channel is worth nothing if the attacker also writes the question.
+
+**The turn is the unit, not the call.** `decide()` never asks; only `decideTurn()` does. A fork per
+call would multiply the cost by your fan-out and put the same question to the same context several
+times over. Skip a turn that is not worth asking about — a page of reads — by calling `decide()` for
+it. Measure how often it actually fires on your own traffic before you turn it on everywhere.
+
+**Everything about it fails to silence.** A fork that throws, times out, declines, or answers
+something unparseable costs the turn its claims and nothing else; the calls are decided exactly as
+they would have been. That direction is deliberate: a claim only ever fills a dimension nothing else
+answered, so its absence leaves the dimension `unknown` and the friction in place.
+
+`parseIntentAnswer` is strict about values and forgiving about wrapping — a fenced code block or a
+bare array is fine, a value outside the closed vocabulary is dropped, and `"unknown"` is read as the
+model declining rather than as an answer. `magnitude` is never asked about at all: its signals are
+counts, and a count is a measurement `classifyAtEdge` reads off your arguments.
+
+### Or send the claim yourself
+
+The four keys are one statement — the incomplete form does not compile, because a marked dimension
+with no model named is a verdict your reviewer can count and cannot question:
 
 ```ts
 import { formatInferredDimensions } from "@theonaai/heron-sdk"
@@ -463,8 +515,10 @@ await session.decide(call, {
 })
 ```
 
-The four keys are one statement — the incomplete form does not compile, because a marked dimension
-with no model named is a verdict your reviewer can count and cannot question.
+If you do it this way, do what `decideTurn` does for you: **never send a claim about a dimension you
+already measured.** A claim travels under the same key a measurement does, so putting one on top does
+not lose the argument — it replaces the measurement in transit and marks the survivor as a model's
+word, leaving Heron one value and no way to learn your edge had measured something else.
 
 Three properties are worth knowing before you wire a judge up to this:
 
@@ -476,6 +530,46 @@ Three properties are worth knowing before you wire a judge up to this:
   `human_decision`, so a model can never sign off on its own step-up.
 - **`inference_slice` is a label, never the text.** `"last_turn"`, `"turn_and_plan"` — how much the
   judge saw, not any of it. The conversation does not cross this boundary in any form.
+
+And the limit, stated where you will read it rather than in a footnote: this is a defence against a
+confused agent and against an injection arriving in *content*. It is **not** a defence against a
+poisoned **system prompt** — a fork whose instructions were rewritten is a compromised judge
+answering honestly. Which is what the next section is for.
+
+## Committing to the agent's own instructions
+
+Everything else you send is about a **call**. Your agent's governing text is not, and a runtime that
+rewrites the system prompt or the plan block mid-session is ordinary rather than exotic — so an agent
+that read an external page and then rewrote its own plan leaves exactly the trace of one that carried
+on, and nobody reading the evidence can tell.
+
+One scalar closes that:
+
+```ts
+import { instructionsHash } from "@theonaai/heron-sdk"
+
+await session.decide(call, {
+  instructions_hash: instructionsHash({ system: systemPrompt, plan: planBlock }),
+})
+```
+
+Heron publishes *that the instructions changed between two commitments* — never a byte of what they
+say — with the digests beside every action, so the change count is your reviewer's arithmetic rather
+than anyone's claim.
+
+- **It feeds no rule, deliberately.** `instructions_hash` is not in `SIGNAL_KEYS`, so there is no
+  spelling of it that reaches a verdict. A commitment whose value could move a decision would be a
+  new way to steer one, and the whole worth of this scalar is that it is inert.
+- **Silence is never stability.** An action with no commitment is published as *uncommitted*, not as
+  *unchanged*, and the coverage sits beside the change count. Commit on every action, or accept that
+  the coverage figure says you did not.
+- **A malformed digest is a 400.** It would compare unequal to everything including a later copy of
+  itself and publish "the instructions changed" on every action carrying it — a false finding about
+  your own agent, in a record nobody can correct. Use the helper; it hashes the two slots separately,
+  so text moved from the system prompt into the plan is the change it actually is.
+
+It is testimony: you compute the digest over text Heron never sees, so it catches *inconsistency*,
+never fabrication. And it says *that* the instructions changed, never *what*.
 
 ## Requirements
 
