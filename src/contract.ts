@@ -1,4 +1,4 @@
-import type { DimensionKey } from "./policy/taxonomy";
+import { DIMENSIONS, type DimensionKey } from "./policy/taxonomy";
 
 /**
  * The trust boundary, as data (docs/trust-boundary.md).
@@ -41,8 +41,11 @@ export type SignalType = "string" | "number" | "boolean";
 export type Derivable = "full" | "partial" | "none";
 
 export interface SignalSpec {
-  /** The classification dimension this signal sets (src/lib/policy/classify.ts), or the STEP_UP approval. */
-  readonly feeds: DimensionKey | "approval";
+  /**
+   * The classification dimension this signal sets (src/lib/policy/classify.ts), or one of the two
+   * statements that are not a dimension: the STEP_UP approval, and the provenance of a model's claim.
+   */
+  readonly feeds: DimensionKey | "approval" | "inference";
   readonly type: SignalType;
   readonly derivable: Derivable;
   /** Why it is what it is — the constraint, for whoever moves the boundary next. */
@@ -132,7 +135,58 @@ export const SIGNAL_KEYS = {
     derivable: "none",
     note: "A human cleared this call in the vendor's own UI BEFORE Heron saw it, so it answers no STEP_UP of ours. Recorded and published; it never lifts a verdict, because unlike `resolves_action` there is no action of ours it can be checked against.",
   },
+  inferred: {
+    feeds: "inference",
+    type: "string",
+    derivable: "none",
+    note: "Comma-separated dimension names whose value on THIS call came from a model rather than from a measurement (`formatInferredDimensions`). It does not carry a value of its own — it re-labels the signals sent beside it, so their `source` is published as `inferred` instead of `declared`. Only the vendor knows which of its own claims are testimony; nothing on our side can tell them apart, which is exactly why the fold would be permanent.",
+  },
+  inference_model: {
+    feeds: "inference",
+    type: "string",
+    derivable: "none",
+    note: "The model that answered, as the vendor names it. Required whenever `inferred` is sent — an unattributed model claim is one a reviewer can count and not question.",
+  },
+  inference_prompt_hash: {
+    feeds: "inference",
+    type: "string",
+    derivable: "none",
+    note: "Hash of the judging prompt the SDK put to the model — the question came from us, versioned and signed, never from the text under attack. Required whenever `inferred` is sent.",
+  },
+  inference_slice: {
+    feeds: "inference",
+    type: "string",
+    derivable: "none",
+    note: "A label for how much of the conversation the fork saw (`last_turn`, `turn_and_plan`) — never any of it. Required whenever `inferred` is sent.",
+  },
 } as const satisfies Record<string, SignalSpec>;
+
+/**
+ * The encoding of `inferred`, owned here because both sides read it: the vendor SDK writes it, the
+ * classifier reads it, and the reviewer's browser re-reads it out of the published signals to
+ * reproduce our verdict. A second copy of the split rule is a second thing to drift, and it would
+ * drift silently — a mis-parsed name simply leaves the dimension `declared`, which is the one
+ * outcome this whole distinction exists to prevent.
+ *
+ * It names *dimensions*, not signal keys, and that choice is the guard: the approval keys feed no
+ * dimension, so there is no spelling of `inferred` that marks `human_decision` as a model's word. A
+ * model able to sign off on its own step-up would be a one-key bypass of every human gate, available
+ * to anyone who can prompt one.
+ *
+ * Unknown names are dropped rather than rejected: the parser runs in a reviewer's browser against
+ * bytes that were signed under an older taxonomy, where refusing the whole list would turn a
+ * dimension we since renamed into an unverifiable receipt. The wire schema is where a name that is
+ * not a dimension is refused, at the door, before anything is signed.
+ */
+export function parseInferredDimensions(value: string): DimensionKey[] {
+  const names = value.split(",").map((name) => name.trim());
+  return DIMENSIONS.filter((d) => names.includes(d));
+}
+
+/** The inverse — the only place the separator is written. */
+export function formatInferredDimensions(dimensions: readonly DimensionKey[]): string {
+  return DIMENSIONS.filter((d) => dimensions.includes(d)).join(",");
+}
 
 /** The wire key of a signal — the classifier's helpers are typed to this, so a typo will not compile. */
 export type SignalKey = keyof typeof SIGNAL_KEYS;

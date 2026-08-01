@@ -47,6 +47,7 @@ export type {
   Signals,
   SignalValue,
   ApprovalSignals,
+  InferenceSignals,
   ReductionCtx,
   StepUpRequest,
   StepUpResolver,
@@ -54,7 +55,12 @@ export type {
 } from "./vendor-guard";
 
 // The boundary contract: the one movable part of the seam, and its per-signal metadata.
-export { SIGNAL_KEYS, SIGNAL_KEY_LIST } from "./contract";
+export {
+  SIGNAL_KEYS,
+  SIGNAL_KEY_LIST,
+  formatInferredDimensions,
+  parseInferredDimensions,
+} from "./contract";
 export type { SignalKey, SignalSpec, SignalType, Derivable } from "./contract";
 
 // The reference edge classifier: the arguments of a call, read for the facts pinned to your side.

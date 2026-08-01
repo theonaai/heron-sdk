@@ -440,6 +440,43 @@ Three rules worth knowing before you write one:
 - **A `200` does not mean it verified.** A bad signature is stored and reported rather than rejected —
   refusing it would delete the evidence that a vendor's signing is broken. Read `signature_valid`.
 
+## When a model is the one saying it
+
+Everything above is a measurement: `classifyAtEdge` counts recipients in the arguments, your
+contract states what a tool does, your catalogue states it under your key. Heron publishes all of it
+as `declared` — a fact you computed.
+
+A model's answer is not that, and sending it as `declared` would be the one substitution this
+package cannot undo. The source is sealed into the published classification and the classification is
+immutable, so a reviewer who cannot separate them today cannot separate them a year of receipts
+later. Mark it, and Heron publishes those dimensions as `inferred` instead:
+
+```ts
+import { formatInferredDimensions } from "@theonaai/heron-sdk"
+
+await session.decide(call, {
+  data_class: "personal",                                   // what the model said
+  inferred: formatInferredDimensions(["data_class"]),       // …and that a model said it
+  inference_model: "claude-sonnet-5",
+  inference_prompt_hash: await hashPrompt(JUDGE_PROMPT),
+  inference_slice: "last_turn",
+})
+```
+
+The four keys are one statement — the incomplete form does not compile, because a marked dimension
+with no model named is a verdict your reviewer can count and cannot question.
+
+Three properties are worth knowing before you wire a judge up to this:
+
+- **It resolves ignorance; it never contradicts.** Heron consults an inferred value only where its
+  own classification came out `unknown`. A model cannot move a dimension your catalogue stated, and
+  it cannot overturn what Heron derived from the tool name — so a judge that has been talked into
+  lying can buy back the friction that ignorance created, and nothing that evidence established.
+- **It names dimensions, never signals.** There is no spelling of `inferred` that marks
+  `human_decision`, so a model can never sign off on its own step-up.
+- **`inference_slice` is a label, never the text.** `"last_turn"`, `"turn_and_plan"` — how much the
+  judge saw, not any of it. The conversation does not cross this boundary in any form.
+
 ## Requirements
 
 A runtime with `fetch`, `AbortController` and `setTimeout` — Node ≥ 18, Bun, Deno, Workers, or a
