@@ -32,10 +32,20 @@ import {
 /** A signal's value on the wire. */
 export type SignalValue = string | number | boolean | null;
 
-/** The signals that stand on their own — everything except the ones that describe an approval. */
+/**
+ * The signals that stand on their own — everything except the two statements that only mean
+ * anything whole: an approval, and the provenance of a model's claim.
+ */
 type StandaloneSignalKey = Exclude<
   SignalKey,
-  "resolves_action" | "human_decision" | "approver" | "human_authorized"
+  | "resolves_action"
+  | "human_decision"
+  | "approver"
+  | "human_authorized"
+  | "inferred"
+  | "inference_model"
+  | "inference_prompt_hash"
+  | "inference_slice"
 >;
 
 /**
@@ -81,9 +91,41 @@ export type ApprovalSignals =
       human_authorized?: never;
     };
 
+/**
+ * Which of the signals sent beside this one are a model's word rather than a measurement — and who
+ * the model was.
+ *
+ * Modelled as a union for the same reason `ApprovalSignals` is: the four keys are one statement, and
+ * the incomplete form is worse than silence. A `inferred: "data_class"` with no model named is a
+ * verdict a reviewer can count and cannot question; a model named with no dimensions listed is
+ * provenance for nothing. Both are a compile error here rather than a 400 discovered from a receipt.
+ *
+ * Sending nothing is the normal case: an ordinary call carries no model claim, and until the vendor's
+ * fork ships, every call is an ordinary call.
+ */
+export type InferenceSignals =
+  | {
+      /** The dimensions the model supplied — build it with `formatInferredDimensions`. */
+      inferred: string;
+      /** The model that answered, as you name it. */
+      inference_model: string;
+      /** Hash of the judging prompt you put to it. */
+      inference_prompt_hash: string;
+      /** How much of the conversation it saw — a label, never the text (invariant #6). */
+      inference_slice: string;
+    }
+  | {
+      inferred?: never;
+      inference_model?: never;
+      inference_prompt_hash?: never;
+      inference_slice?: never;
+    };
+
 /** Scalars a tool asserts. Typed against the ONE vocabulary (src/lib/contract.ts): a signal the
  * classifier does not read will not compile — the same guarantee classify.ts has. */
-export type Signals = Partial<Record<StandaloneSignalKey, SignalValue>> & ApprovalSignals;
+export type Signals = Partial<Record<StandaloneSignalKey, SignalValue>> &
+  ApprovalSignals &
+  InferenceSignals;
 
 export interface ReductionCtx<A> {
   args: A;
