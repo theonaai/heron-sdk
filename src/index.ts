@@ -33,6 +33,7 @@ export {
   memorySessionStore,
 } from "./vendor-guard";
 export type {
+  InstructionSignals,
   ToolContract,
   ContractMap,
   GuardedCall,
@@ -72,6 +73,33 @@ export type {
   EdgeFields,
   EdgeSignals,
 } from "./edge-classify";
+
+// The fork: ask your own model what it is about to do, and send the answer marked as testimony.
+// The question is ours and versioned; the asking is yours, because the session and the bill are.
+export {
+  INTENT_DIMENSIONS,
+  INTENT_PROMPT,
+  INTENT_PROMPT_HASH,
+  INTENT_PROMPT_VERSION,
+  buildIntentQuestion,
+  intentSignals,
+  parseIntentAnswer,
+  stripMeasured,
+} from "./policy/intent";
+export type {
+  IntentAsker,
+  IntentCall,
+  IntentClaim,
+  IntentDimension,
+  IntentOptions,
+  IntentQuestion,
+  IntentSignals,
+  IntentSlice,
+} from "./policy/intent";
+
+// The commitment to the agent's own governing text — inert by construction, and the only thing that
+// makes a mid-session rewrite of the system prompt visible at all.
+export { INSTRUCTIONS_SIGNAL, instructionsHash } from "./instructions";
 
 // Edge-side pseudonymisation: tokenise a recipient before it crosses, with the vendor's own key.
 export { pseudonymWith, replaceAnchors, collectAnchors, ANCHOR_PATTERNS } from "./pseudonym-core";

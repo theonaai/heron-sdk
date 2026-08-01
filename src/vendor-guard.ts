@@ -1,6 +1,14 @@
 import type { SignalKey } from "./contract";
 import { hashCanonical } from "./crypto/hash";
 import { classifyAtEdge, type EdgeClassifierOptions } from "./edge-classify";
+import {
+  type IntentOptions,
+  type IntentSignals,
+  buildIntentQuestion,
+  intentSignals,
+  parseIntentAnswer,
+  stripMeasured,
+} from "./policy/intent";
 import type { AnchorType } from "./pseudonym-core";
 import {
   type BeforeActionResult,
@@ -121,11 +129,29 @@ export type InferenceSignals =
       inference_slice?: never;
     };
 
+/**
+ * The commitment to the agent's governing text (src/instructions.ts) — the one key here that is
+ * *not* part of the classifier's vocabulary.
+ *
+ * It sits outside `SIGNAL_KEYS` on purpose: nothing may turn a verdict on it, and the whole worth of
+ * the scalar is that it is inert. But it does travel in `signals` — which buys chain coverage for
+ * free, since `signals_hash` is in the chained record and a commitment therefore cannot be restated
+ * later — so it needs a slot here, or the one thing the type system would have caught (a typo in the
+ * key) becomes a commitment silently sent to nobody.
+ *
+ * Build it with `instructionsHash()`. A digest in any other shape is a 400, because a value that
+ * cannot be compared reads as a change on every action.
+ */
+export interface InstructionSignals {
+  instructions_hash?: string;
+}
+
 /** Scalars a tool asserts. Typed against the ONE vocabulary (src/lib/contract.ts): a signal the
  * classifier does not read will not compile — the same guarantee classify.ts has. */
 export type Signals = Partial<Record<StandaloneSignalKey, SignalValue>> &
   ApprovalSignals &
-  InferenceSignals;
+  InferenceSignals &
+  InstructionSignals;
 
 export interface ReductionCtx<A> {
   args: A;
@@ -484,6 +510,19 @@ export interface GuardOptions {
    * Pass `false` to turn it off.
    */
   edge?: EdgeClassifierOptions | false;
+  /**
+   * The fork (src/policy/intent.ts): before a group of tool calls, fork the live session — same
+   * agent, same model — and ask it what it is about to do. The answer crosses as an `inferred`
+   * claim, marked as testimony, and Heron reads it only where its own pass came back `unknown`.
+   *
+   * Off unless set, and it only ever runs from `decideTurn()`. Both are deliberate. Off, because
+   * this spends the vendor's tokens on the vendor's bill and nobody should discover that from an
+   * invoice. And from `decideTurn` alone, because the unit is a **model turn**, not a call: a fork
+   * per call would multiply the cost by the fan-out and ask the same question of the same context
+   * several times over. `decide()` never asks, which is also how you skip a turn that is not worth
+   * asking about — a page of reads, most obviously.
+   */
+  intent?: IntentOptions;
 }
 
 /**
@@ -576,6 +615,14 @@ export interface GuardedSession {
    * the fact a reviewer is looking for. Merged last, so it beats the contract and the edge classifier.
    */
   decide(call: GuardedCall, signals?: Signals): Promise<GuardDecision>;
+  /**
+   * Decide every call of one model turn, asking the fork once for the group (`GuardOptions.intent`).
+   *
+   * Returns one decision per call, in the order given. With no `intent` configured it is simply
+   * `decide()` over the group — which is still the entry point to reach for, because the turn is the
+   * unit the fork is priced in and adding it later is then a config change rather than a rewrite.
+   */
+  decideTurn(calls: GuardedCall[], signals?: Signals): Promise<GuardDecision[]>;
   /** File the signed statement of what happened to a call Heron decided on. */
   report(input: {
     actionId: string;
@@ -624,6 +671,7 @@ export async function openGuardedSession(opts: GuardOptions): Promise<GuardedSes
     call: ResolvedCall,
     extra?: Signals,
     callRef?: string,
+    claim?: IntentSignals,
   ): Promise<BeforeActionResult> {
     const contract = resolveContract(call, opts.contracts);
     const argsRedacted = reduce(call.args, contract, anchor);
@@ -644,7 +692,17 @@ export async function openGuardedSession(opts: GuardOptions): Promise<GuardedSes
     // Merged as a plain map, not as `Signals`: the approval keys are a union there, and merging two
     // of its branches is exactly the thing the union forbids at a call site. Each contributor was
     // already type-checked as `Signals` where it was written, which is where the guarantee belongs.
-    const signals: Record<string, SignalValue | undefined> = { ...derived, ...base, ...extra };
+    const measured: Record<string, SignalValue | undefined> = { ...derived, ...base, ...extra };
+
+    // The model's claim goes UNDER every measurement, and only for dimensions no measurement spoke
+    // to. It has to be this way round because a claim travels under the same key a measurement does:
+    // merged on top it would not lose the argument, it would *replace* the measurement in transit and
+    // mark the survivor as a model's word — leaving Heron one value, labelled `inferred`, with no way
+    // to learn that this side had measured something else. `stripMeasured` re-derives the marking from
+    // what survives, so the witness never outlives the claims it was provenance for.
+    const signals: Record<string, SignalValue | undefined> = claim
+      ? { ...stripMeasured(claim, measured), ...measured }
+      : measured;
 
     const { seq, prevHash } = await store.reserve(opts.sessionExternalId, callRef);
     const before = await opts.heron.beforeAction({
@@ -709,12 +767,72 @@ export async function openGuardedSession(opts: GuardOptions): Promise<GuardedSes
     };
   }
 
-  async function decide(call: GuardedCall, signals?: Signals): Promise<GuardDecision> {
+  async function decide(
+    call: GuardedCall,
+    signals?: Signals,
+    claim?: IntentSignals,
+  ): Promise<GuardDecision> {
     try {
-      return interpret(await submit(resolveCall(call), signals, call.id));
+      return interpret(await submit(resolveCall(call), signals, call.id, claim));
     } catch (error) {
       return unavailable(error, "decide", call.name);
     }
+  }
+
+  /**
+   * Ask the fork once for the whole turn, and hand each call the claim about itself.
+   *
+   * Everything here fails to *silence* rather than to an error: a fork that throws, times out,
+   * declines, or answers something unparseable costs the turn its claims and nothing else, and the
+   * calls are decided exactly as they would have been without it. That direction is not politeness —
+   * a claim only ever fills a dimension nothing else answered, so its absence leaves the dimension
+   * `unknown` and the friction in place. An intent asker that could take a verdict down would have
+   * made the safety feature a new outage.
+   */
+  async function askIntent(calls: GuardedCall[]): Promise<Map<string, IntentSignals>> {
+    const claims = new Map<string, IntentSignals>();
+    if (!opts.intent || calls.length === 0) return claims;
+
+    // The ref is the runtime's own call id where there is one, so the model's answer is keyed by the
+    // same identity the rest of the loop uses. The positional fallback is scoped to this question and
+    // never leaves it.
+    const refs = calls.map((call, index) => call.id ?? `call_${index + 1}`);
+    const question = buildIntentQuestion(
+      calls.map((call, index) => ({ ref: refs[index]!, name: call.name })),
+    );
+
+    try {
+      const answer = await opts.intent.ask(question);
+      for (const parsed of parseIntentAnswer(answer, refs)) {
+        const signals = intentSignals(parsed, opts.intent);
+        if (Object.keys(signals).length > 0) claims.set(parsed.ref, signals);
+      }
+    } catch (error) {
+      opts.onError?.(error, { stage: "intent" });
+    }
+    return claims;
+  }
+
+  /**
+   * Decide a whole model turn: one question to the fork, then the calls, each carrying the claim
+   * about itself.
+   *
+   * The turn is the unit because that is what the fork is cheap on — the prefix is already cached, so
+   * one completion covers every call the model just decided to make. Use it wherever your runtime
+   * knows its turn boundary; use `decide()` for a single call, or for a turn you have decided is not
+   * worth asking about.
+   *
+   * The calls are submitted concurrently, as an agent runtime dispatches them. Heron links them in
+   * arrival order under its own chain position, so their order here is not load-bearing — and the
+   * decisions come back in the order the calls were given, whatever order they landed in.
+   */
+  async function decideTurn(calls: GuardedCall[], signals?: Signals): Promise<GuardDecision[]> {
+    const claims = await askIntent(calls);
+    return Promise.all(
+      calls.map((call, index) =>
+        decide(call, signals, claims.get(call.id ?? `call_${index + 1}`)),
+      ),
+    );
   }
 
   async function report(input: {
@@ -842,6 +960,7 @@ export async function openGuardedSession(opts: GuardOptions): Promise<GuardedSes
 
   return {
     decide,
+    decideTurn,
     report,
     resolveStepUp,
     wrap,
