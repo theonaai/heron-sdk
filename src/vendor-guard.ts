@@ -660,12 +660,20 @@ export async function openGuardedSession(opts: GuardOptions): Promise<GuardedSes
   const resolveCall: CallResolver = opts.resolveCall ?? ((c) => ({ name: c.name, args: c.args }));
   const deliver = opts.deliver ?? ((send: () => Promise<void>) => send());
 
-  await opts.heron.openSession({
+  const opened = await opts.heron.openSession({
     externalId: opts.sessionExternalId,
     agent: opts.agent,
     principal: opts.principal,
     originalRequest: opts.request,
   });
+  // The open answers with this session's genesis hash, and seeding the store with it is what makes
+  // the *first* action claim a link at all. Two things follow, and both were wrong without it.
+  // A vendor that drops its first action left nothing pointing at genesis, so the hole was
+  // invisible to Heron. And the head is a per-session value kept in a process-wide map, only ever
+  // written by `advance()` — so a session that opened after another one in the same process
+  // inherited its predecessor's last `record_hash` and claimed it, which reads on the evidence page
+  // as a BROKEN_CHAIN indistinguishable from tampering. Writing genesis here resets it, every time.
+  await store.advance(opts.sessionExternalId, opened.head_hash);
 
   async function submit(
     call: ResolvedCall,
