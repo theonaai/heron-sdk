@@ -1,6 +1,6 @@
 {
   "name": "@theonaai/heron-sdk",
-  "version": "0.14.0",
+  "version": "0.14.1",
   "description": "Heron vendor SDK — one hook before a tool call, one signed statement after. Framework-agnostic guard + declarative reduction, no server dependencies.",
   "license": "Apache-2.0",
   "type": "module",
