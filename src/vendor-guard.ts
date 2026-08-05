@@ -1,5 +1,6 @@
 import type { SignalKey } from "./contract";
 import { hashCanonical } from "./crypto/hash";
+import type { SessionGrant, SessionTask } from "./delegation";
 import { classifyAtEdge, type EdgeClassifierOptions } from "./edge-classify";
 import {
   type IntentOptions,
@@ -488,6 +489,19 @@ export interface GuardOptions {
   /** The user's request, in full — stays on the edge; HeronClient sends only its hash + a redaction. */
   request: string;
   sessionExternalId: string;
+  /**
+   * The job this run belongs to, and the run that spawned it (src/delegation.ts). Passed straight
+   * through to the open: it is a fact about the run, so it is stated once, where the run begins.
+   */
+  task?: SessionTask;
+  /**
+   * What this run was allowed to do (src/delegation.ts).
+   *
+   * Also stated once, at the open, and deliberately not per call: a delegation restated on every call
+   * is one that can differ between two calls of the same run, and no reading of that disagreement is
+   * honest. If the authority genuinely changes mid-flight, that is a new run.
+   */
+  grant?: SessionGrant;
   /** Defaults to `memorySessionStore()`. Supply one that outlives the process if your runs do. */
   store?: SessionStore;
   /** Identity and argument normalisation for this vendor's call shape. Defaults to identity. */
@@ -703,6 +717,8 @@ export async function openGuardedSession(opts: GuardOptions): Promise<GuardedSes
     agent: opts.agent,
     principal: opts.principal,
     originalRequest: opts.request,
+    task: opts.task,
+    grant: opts.grant,
   });
   // The open answers with this session's genesis hash, and seeding the store with it is what makes
   // the *first* action claim a link at all. Two things follow, and both were wrong without it.

@@ -1,5 +1,50 @@
 # Changelog
 
+## 0.16.0
+
+### Added
+
+- **`task` and `grant` on the open — the two questions the wire could not carry.** Everything else
+  Heron is missing, a vendor can close by sending more. These two could not be: *what the agent was
+  allowed* had no field at all, and *how a run links to other runs* had only the session id and chain
+  position, so "these four runs were one job" was not expressible even in principle. Heron reserved
+  both; this is the side that fills them.
+
+  - `openGuardedSession({ task, grant })` and `HeronClient.openSession({ task, grant })`. Stated once,
+    at the open, because a delegation restated per call is one that can differ between two calls of
+    the same run — and no reading of that disagreement is honest. If the authority genuinely changes
+    mid-flight, that is a new run.
+  - `task: { ref, parentSessionExternalId? }`. The reference is hashed into the session's genesis
+    record and never published: a reviewer sees a number local to their page, so several runs link by
+    their digests matching while the id stays in your namespace. An address there is refused with a
+    `400`, like `principal.ref` — a value scrubbed quietly would stop matching the one you sent, and
+    two runs of one job would stop linking for a reason invisible from both sides.
+  - `grant: { document, ref?, scope? }`. `document` is the **document**, not a digest, for the reason
+    `resolveStepUp({ shownText })` takes the text: the hashing happens in one place no call site can
+    forget, and the document never crosses. It is hashed with `hashCanonical` (RFC 8785), so an object
+    straight out of your own store is safe to pass — key order will not decide whether you can
+    reproduce the digest a month later.
+  - `scope` is the optional machine-readable half, written in Heron's own classification classes
+    rather than a delegation language of ours — so a check, when it exists, is a comparison between
+    two things the published record already holds. An absent key means *unbounded on that dimension*;
+    an empty list is refused, because `[]` cannot say whether you meant "nothing is allowed" or "this
+    is not bounded", and a delegation is the last document to guess in.
+  - `taskPayload`, `grantPayload` and the types are exported for a runtime that opens its own
+    sessions.
+
+  **Unkeyed, unlike `shown_text_hash`, and the difference is the pre-image.** A delegation document is
+  your own configuration, so its digest sits with `instructions_hash` — published, and safe to
+  publish. A confirmation prompt is prose about a person, which is why that one is keyed.
+
+  **Both are inert, and that is the design rather than an unfinished edge.** Neither reaches a
+  verdict. A grant is the audited party describing its own limits, so a rule turning on it would make
+  omitting it the cheapest way to avoid the rule; and reaching beyond a named set is a fact and not a
+  fault — an agent that resolves a tool at runtime is doing its job. Heron publishes how much of a
+  window stated anything, and counts no breach.
+
+  Needs a Heron that accepts the fields (the app from 05.08.2026); an older one rejects the open with
+  a `400`, so that side goes first.
+
 ## 0.15.0
 
 ### Added
