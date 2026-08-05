@@ -34,6 +34,7 @@ export {
 } from "./vendor-guard";
 export type {
   InstructionSignals,
+  ShownTextSignals,
   ToolContract,
   ContractMap,
   GuardedCall,
@@ -100,6 +101,11 @@ export type {
 // The commitment to the agent's own governing text — inert by construction, and the only thing that
 // makes a mid-session rewrite of the system prompt visible at all.
 export { INSTRUCTIONS_SIGNAL, instructionsHash } from "./instructions";
+
+// The commitment to what a human was shown before they approved — inert in the same way, and the
+// only thing that separates a decision from a rubber stamp in the record. Keyed with the vendor's
+// own secret; `HeronClient.shownTextHash` is the call to reach for, and holds the key for you.
+export { SHOWN_TEXT_SIGNAL, shownTextHash } from "./shown-text";
 
 // Edge-side pseudonymisation: tokenise a recipient before it crosses, with the vendor's own key.
 export { pseudonymWith, replaceAnchors, collectAnchors, ANCHOR_PATTERNS } from "./pseudonym-core";
