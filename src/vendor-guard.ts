@@ -146,12 +146,30 @@ export interface InstructionSignals {
   instructions_hash?: string;
 }
 
+/**
+ * The commitment to what a human was shown before they approved (src/shown-text.ts) — the second key
+ * here that is outside the classifier's vocabulary, and outside it for the same reason.
+ *
+ * It belongs on the action carrying the answer, and `resolveStepUp` fills it for you from the text:
+ * hand it what you rendered and the digest is keyed with your own secret, so the field below is for
+ * the paths that build their own signals — an approval your UI collected before Heron was asked, most
+ * of all, since that is where a confirmation prompt of your own design lives.
+ *
+ * Build it with `HeronClient.shownTextHash()`. A digest in any other shape is a 400: this one is never
+ * compared with anything of Heron's, so a value nobody can reproduce later binds you to nothing while
+ * still publishing the approval as bound to its prompt.
+ */
+export interface ShownTextSignals {
+  shown_text_hash?: string;
+}
+
 /** Scalars a tool asserts. Typed against the ONE vocabulary (src/lib/contract.ts): a signal the
  * classifier does not read will not compile — the same guarantee classify.ts has. */
 export type Signals = Partial<Record<StandaloneSignalKey, SignalValue>> &
   ApprovalSignals &
   InferenceSignals &
-  InstructionSignals;
+  InstructionSignals &
+  ShownTextSignals;
 
 export interface ReductionCtx<A> {
   args: A;
@@ -301,7 +319,7 @@ export interface GuardedTool {
  * substitute a transport that runs the real engine. */
 export type GuardClient = Pick<
   HeronClient,
-  "anchor" | "openSession" | "beforeAction" | "execution" | "closeSession"
+  "anchor" | "shownTextHash" | "openSession" | "beforeAction" | "execution" | "closeSession"
 >;
 
 /**
@@ -451,10 +469,16 @@ export interface StepUpRequest {
   tool: string;
 }
 
-/** The vendor's approval channel. Absent → a STEP_UP stays blocked (fail-closed), which is correct. */
+/**
+ * The vendor's approval channel. Absent → a STEP_UP stays blocked (fail-closed), which is correct.
+ *
+ * `shownText` is optional and is the text this channel put in front of the person — returned rather
+ * than asked for, because this function is the only place in the loop that knows it. It is digested
+ * with the client's own key before anything crosses (src/shown-text.ts); nothing here sends a prompt.
+ */
 export type StepUpResolver = (
   req: StepUpRequest,
-) => Promise<{ approved: boolean; approver: string }>;
+) => Promise<{ approved: boolean; approver: string; shownText?: string }>;
 
 export interface GuardOptions {
   heron: GuardClient;
@@ -643,6 +667,20 @@ export interface GuardedSession {
     call: { name: string; args: Record<string, unknown> };
     approved: boolean;
     approver: string;
+    /**
+     * The text your confirmation UI actually rendered to the person who answered.
+     *
+     * The **text**, not a digest: the digest is computed here with the key the client already holds
+     * (`HeronClient.shownTextHash`), so the one thing that makes it safe to publish a commitment at
+     * all cannot be forgotten at a call site. The text does not cross — invariant #6 is not bent for
+     * this, and Heron never sees a byte of it.
+     *
+     * Omit it and the approval is recorded exactly as before, and published as an answer nothing
+     * says the grounds for. That is the honest reading, and it is why this is worth two lines: an
+     * approval given to a misleading prompt and one given to an accurate prompt are otherwise the
+     * same record.
+     */
+    shownText?: string;
   }): Promise<GuardDecision>;
   /** Wrap plain `{ name, run }` tools so they carry the whole loop themselves. */
   wrap(tools: GuardedTool[]): GuardedTool[];
@@ -869,12 +907,20 @@ export async function openGuardedSession(opts: GuardOptions): Promise<GuardedSes
     call: { name: string; args: Record<string, unknown> };
     approved: boolean;
     approver: string;
+    shownText?: string;
   }): Promise<GuardDecision> {
     try {
       const before = await submit(resolveCall(input.call), {
         resolves_action: input.actionId,
         human_decision: input.approved ? "APPROVE" : "DENY",
         approver: input.approver,
+        // Digested here, with the client's own key, so the vendor passes the prompt and never the
+        // hash. Spread rather than set to `undefined`: an explicit `shown_text_hash: undefined`
+        // would still be a key in the object, and the signals object is hashed into the chain
+        // record — a key that is present and empty is not the same statement as one that is absent.
+        ...(input.shownText === undefined
+          ? {}
+          : { shown_text_hash: opts.heron.shownTextHash(input.shownText) }),
       });
       return interpret(before);
     } catch (error) {
@@ -899,7 +945,7 @@ export async function openGuardedSession(opts: GuardOptions): Promise<GuardedSes
           if (!opts.onStepUp) {
             return blocked(decision.actionId, "STEP_UP", "no approval channel is configured");
           }
-          const { approved, approver } = await opts.onStepUp({
+          const { approved, approver, shownText } = await opts.onStepUp({
             actionId: decision.actionId,
             tool: tool.name,
           });
@@ -908,6 +954,7 @@ export async function openGuardedSession(opts: GuardOptions): Promise<GuardedSes
             call: { name: tool.name, args },
             approved,
             approver,
+            shownText,
           });
         }
 

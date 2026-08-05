@@ -102,8 +102,18 @@ When the human answers a step-up *Heron* raised — in whatever process — you 
 new action instead:
 
 ```ts
-await guard.resolveStepUp({ actionId, call: { name, args }, approved, approver: reviewerId });
+await guard.resolveStepUp({
+  actionId,
+  call: { name, args },
+  approved,
+  approver: reviewerId,
+  shownText: promptYouRendered,   // the text, not a digest — see below
+});
 ```
+
+`shownText` is what your confirmation UI actually put in front of that person. It is digested here
+with your own key and only the digest crosses; pass it and an approval is bound to its prompt, omit
+it and the approval is recorded exactly as before — as an answer nothing states the grounds for.
 
 `decide()` never blocks on a person and never throws because Heron is down. **There is no fail-open
 option, deliberately**: a policy gate that throws hands you an exception where you asked for a
@@ -357,6 +367,8 @@ The root export carries the vendor surface:
   `parseIntentAnswer`, `intentSignals`, `stripMeasured` — the fork: the question the SDK owns, and
   the parsing of what comes back. `session.decideTurn()` drives all of it.
 - `instructionsHash`, `INSTRUCTIONS_SIGNAL` — the commitment to your agent's governing text.
+- `shownTextHash`, `SHOWN_TEXT_SIGNAL` — the commitment to what a human was shown before approving.
+  `HeronClient.shownTextHash(text)` is the call to reach for: it holds the key for you.
 - `classifyAtEdge`, `EdgeClassifierOptions` — the reference classifier over a call's arguments.
 - `pseudonymWith`, `replaceAnchors`, `collectAnchors`, `ANCHOR_PATTERNS`, `AnchorType` — edge tokenisation.
 - `buildExecutionEvidencePayload`, `ExecutionEvidencePayload` — the statement you sign.
@@ -570,6 +582,51 @@ than anyone's claim.
 
 It is testimony: you compute the digest over text Heron never sees, so it catches *inconsistency*,
 never fabrication. And it says *that* the instructions changed, never *what*.
+
+## Committing to what the human was shown
+
+A person approving is already the strongest thing in your record: a new action naming the step-up it
+answers, signed and chained, with the decision stated rather than assumed. What none of it says is
+**what that person was looking at** — and the two ends of that range leave the identical trace:
+
+> *"Send this contract to 240 recipients outside your company?"*
+> *"The agent would like to continue — OK?"*
+
+Same signals, same classification, same receipt. So a decision and a rubber stamp are
+indistinguishable in the one place a reviewer goes looking for a human. `resolveStepUp` takes the
+text (above); for an approval your own UI collected before Heron was asked, commit to it directly:
+
+```ts
+await session.decide(call, {
+  human_authorized: true,
+  approver: reviewerId,
+  shown_text_hash: heron.shownTextHash(promptYouRendered),
+})
+```
+
+You cannot then restate what you showed: the digest rides in `signals`, `signals_hash` is in the
+chained record, and producing the text later either recomputes to the value you committed to or it
+does not.
+
+- **It is keyed with your `pseudonymSecret`, and that is not optional hardening.** Your evidence page
+  publishes only *that* you committed — never the digest — but `signals_hash` is published, and a
+  confirmation prompt is a template with a name and an amount dropped into it. An unkeyed digest is
+  therefore a confirmation oracle for anyone already holding a candidate address, which is exactly
+  the shape the anchors exist to avoid. `HeronClient.shownTextHash()` holds the key so no call site
+  can forget it.
+- **It feeds no rule, deliberately** — like `instructions_hash`, it is outside `SIGNAL_KEYS`. A rule
+  that fired on it would make *omitting* it the cheapest way out, so the vendor with the worst
+  confirmation prompts would have the strongest reason to send nothing.
+- **A malformed digest is a 400.** Unlike the instruction commitment, this one is never compared with
+  anything of Heron's: its whole job is to be reproducible *later*, from bytes you still hold. One
+  nobody can reproduce binds you to nothing while still publishing the approval as bound to its
+  prompt, in a record that cannot be corrected afterwards.
+- **Keep the text.** The commitment is worth exactly what your own retention of the prompt is worth —
+  it fixes what you showed; it does not store it for you.
+
+It says you are answerable for what you showed. It does not say that what you showed described the
+call: that judgement needs the text, and the text staying on your side is the shape of this whole
+integration.
 
 ## Requirements
 

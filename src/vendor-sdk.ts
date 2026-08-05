@@ -2,6 +2,7 @@ import type { SignalKey } from "./contract";
 import { keyPairFromSeed, signCanonical } from "./crypto/ed25519";
 import { hashCanonical } from "./crypto/hash";
 import { type AnchorType, collectAnchors, pseudonymWith } from "./pseudonym-core";
+import { shownTextHash } from "./shown-text";
 import { buildExecutionEvidencePayload } from "./statements";
 import { type CatalogEntry, buildToolCatalog, catalogHash } from "./tool-catalog";
 
@@ -277,6 +278,17 @@ export class HeronClient {
    */
   anchor(type: AnchorType, value: string): string {
     return pseudonymWith(this.options.pseudonymSecret, type, value, VENDOR_SCOPE);
+  }
+
+  /**
+   * Commit to the bytes your confirmation UI rendered to a human (src/shown-text.ts).
+   *
+   * A method here rather than a bare helper for the reason `anchor()` is one: the key is the whole
+   * privacy property, and a call that already holds it is one nobody can forget to key. Hand it the
+   * text you showed — the digest crosses, the text stays on this side.
+   */
+  shownTextHash(text: string): string {
+    return shownTextHash({ text, key: this.options.pseudonymSecret });
   }
 
   async openSession(input: {
