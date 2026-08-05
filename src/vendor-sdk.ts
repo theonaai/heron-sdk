@@ -1,5 +1,11 @@
 import type { SignalKey } from "./contract";
 import { keyPairFromSeed, signCanonical } from "./crypto/ed25519";
+import {
+  type SessionGrant,
+  type SessionTask,
+  grantPayload,
+  taskPayload,
+} from "./delegation";
 import { hashCanonical } from "./crypto/hash";
 import { type AnchorType, collectAnchors, pseudonymWith } from "./pseudonym-core";
 import { shownTextHash } from "./shown-text";
@@ -296,6 +302,24 @@ export class HeronClient {
     agent: { externalId: string; name?: string; version?: string };
     principal: { type: "human" | "service"; ref: string };
     originalRequest: string;
+    /**
+     * The job this run belongs to, and the run that spawned it (src/delegation.ts).
+     *
+     * How a run links to other runs was one of two questions with no field on the wire at all — the
+     * session id and chain position only say where a call sits inside *this* run. The reference is
+     * hashed into the session's genesis record and never published, so several runs of one job link
+     * by their digests matching while the id itself stays here.
+     */
+    task?: SessionTask;
+    /**
+     * What this run was allowed to do (src/delegation.ts) — the other one.
+     *
+     * A digest over your own delegation document, computed here so the document never crosses, plus
+     * an optional named set written in Heron's own classes. Committed at open, so it cannot be
+     * restated after the run misbehaves. Inert: no rule reads it, and no verdict changes because you
+     * sent one.
+     */
+    grant?: SessionGrant;
     startedAt?: Date;
   }): Promise<{ session_id: string; head_hash: string }> {
     return this.post(
@@ -319,6 +343,10 @@ export class HeronClient {
             this.anchor(type, value),
           ),
         },
+        // Omitted rather than sent as null when there is none: an absent field is a vendor that said
+        // nothing, and Heron's record has to be able to tell that from a claim.
+        ...(input.task ? { task: taskPayload(input.task) } : {}),
+        ...(input.grant ? { grant: grantPayload(input.grant) } : {}),
         started_at: (input.startedAt ?? new Date()).toISOString(),
       },
       // Opening the same session twice is already a replay on Heron's side, so the key only has to

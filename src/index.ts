@@ -107,6 +107,19 @@ export { INSTRUCTIONS_SIGNAL, instructionsHash } from "./instructions";
 // own secret; `HeronClient.shownTextHash` is the call to reach for, and holds the key for you.
 export { SHOWN_TEXT_SIGNAL, shownTextHash } from "./shown-text";
 
+// The job a run belongs to and the authority it was given — the two questions that had no field on
+// the wire at all. Stated once at the open, committed into the session's genesis record as digests,
+// and inert: no rule reads either, and nothing counts an action as having exceeded a grant.
+export { grantPayload, taskPayload } from "./delegation";
+export type {
+  GrantBounds,
+  GrantPayload,
+  GrantScope,
+  SessionGrant,
+  SessionTask,
+  TaskPayload,
+} from "./delegation";
+
 // Edge-side pseudonymisation: tokenise a recipient before it crosses, with the vendor's own key.
 export { pseudonymWith, replaceAnchors, collectAnchors, ANCHOR_PATTERNS } from "./pseudonym-core";
 export type { AnchorType } from "./pseudonym-core";

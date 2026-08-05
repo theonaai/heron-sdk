@@ -35,6 +35,8 @@ const guard = await openGuardedSession({
   principal: { type: "human", ref: "user_881" },
   request: userRequest,                    // stays on the edge; only its hash + anchor tokens cross
   sessionExternalId: runId,
+  task: { ref: jobId },                    // optional — which job this run belongs to
+  grant: { document: delegationRecord },   // optional — what it was allowed; hashed here, never sent
   onStepUp: async ({ tool }) => showApprovalUI(tool), // your human-approval channel
 });
 
@@ -114,6 +116,45 @@ await guard.resolveStepUp({
 `shownText` is what your confirmation UI actually put in front of that person. It is digested here
 with your own key and only the digest crosses; pass it and an approval is bound to its prompt, omit
 it and the approval is recorded exactly as before — as an answer nothing states the grounds for.
+
+## The job a run belongs to, and what it was allowed
+
+Two optional fields on the open, and the only two facts Heron's wire could not carry at all until
+0.16.0 — everything else it was missing, a vendor could close by sending more.
+
+```ts
+await openGuardedSession({
+  // …
+  task: { ref: jobId, parentSessionExternalId: parentRunId },
+  grant: {
+    document: delegationRecord,          // your own policy/ticket/approval — hashed here, never sent
+    ref: "delegation_2261",              // a pointer into your system; opaque, never interpreted
+    scope: {                             // optional, and the half a checker can actually read
+      allowedTools: ["crm.get_customer", "gmail.send"],
+      bounds: { operation: ["read", "send"], destination: ["internal"] },
+      expiresAt: lapsesAt,
+    },
+  },
+});
+```
+
+`task.ref` is how several runs read as one job. It is hashed into the session's genesis record and
+never published — a reviewer sees a number local to their page — so the id itself stays in your
+namespace. It is refused with a `400` if it looks like an address, like `principal.ref`: a value
+Heron scrubbed quietly would stop matching the one you sent, and two runs of one job would stop
+linking for a reason invisible from both sides.
+
+`grant.document` is the **document**, not a digest, for the same reason `shownText` is the text —
+the hashing happens in one place nobody can forget. It is unkeyed, unlike a confirmation prompt,
+because a delegation document is your own configuration rather than prose about a person. Inside
+`scope`, an absent key means *unbounded on that dimension*; an empty list is refused, since `[]`
+cannot say whether you meant "nothing is allowed" or "this is not bounded".
+
+Both are committed at the open, so what a run claimed about its own authority cannot be restated
+after it misbehaves — and **both are inert**. No rule reads either, and no verdict changes because
+you sent one. Heron publishes how much of a window stated anything and counts no breach: reaching
+beyond a named set is a fact and not a fault, and an agent that resolves a tool at runtime is doing
+its job.
 
 `decide()` never blocks on a person and never throws because Heron is down. **There is no fail-open
 option, deliberately**: a policy gate that throws hands you an exception where you asked for a
@@ -369,6 +410,9 @@ The root export carries the vendor surface:
 - `instructionsHash`, `INSTRUCTIONS_SIGNAL` — the commitment to your agent's governing text.
 - `shownTextHash`, `SHOWN_TEXT_SIGNAL` — the commitment to what a human was shown before approving.
   `HeronClient.shownTextHash(text)` is the call to reach for: it holds the key for you.
+- `taskPayload`, `grantPayload`, `SessionTask`, `SessionGrant`, `GrantScope`, `GrantBounds` — the job
+  a run belongs to and the authority it was given. `openGuardedSession({ task, grant })` is the call
+  to reach for; these are for a runtime that opens sessions itself.
 - `classifyAtEdge`, `EdgeClassifierOptions` — the reference classifier over a call's arguments.
 - `pseudonymWith`, `replaceAnchors`, `collectAnchors`, `ANCHOR_PATTERNS`, `AnchorType` — edge tokenisation.
 - `buildExecutionEvidencePayload`, `ExecutionEvidencePayload` — the statement you sign.
