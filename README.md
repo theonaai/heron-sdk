@@ -117,6 +117,40 @@ await guard.resolveStepUp({
 with your own key and only the digest crosses; pass it and an approval is bound to its prompt, omit
 it and the approval is recorded exactly as before — as an answer nothing states the grounds for.
 
+## The calls your own side stops
+
+Your platform already refuses calls before Heron is ever asked: a rate limit, a budget, a tool a
+viewer may not run, an agent that changed its mind between choosing the tool and reaching it. Those
+calls live in your logs and nowhere else — no action, no verdict, nothing to pair — so **the safest
+thing your platform does is the one thing its record cannot show**.
+
+```ts
+const { wouldHaveBeen } = await session.reportUnattempted(
+  { name, args },
+  { errorCode: "rate_limited" },   // your vocabulary, never read by a rule
+);
+```
+
+It submits the action exactly as `decide()` would — same contract, same reduction, same edge
+classifier, so no argument crosses that would not have crossed anyway — and files a `NOT_ATTEMPTED`
+statement against it: *the agent asked for this, and it did not happen.*
+
+Three things worth knowing before you wire it:
+
+- **`wouldHaveBeen` is a measurement, not clearance.** It is the verdict for a call nobody made, and
+  it is the cheap way to see your own limits and your published policy diverging: an `ALLOW` means
+  your limit stopped something the policy permits, a `DENY` means the two agree.
+- **Nothing is gated on it and nothing throws.** The call is already not happening, so an
+  unreachable Heron costs you the row and never a run — the opposite of `decide()`, which fails
+  closed because something is waiting on its answer. Call it after you have answered the model.
+- **Say it rather than saying nothing.** Silence is published as `MISSING_EXECUTION`, a finding
+  about *your reporting*, raised over a call that never happened. `NOT_ATTEMPTED` claims nothing
+  about the verdict — it can never stand in for `BLOCKED` — and Heron counts it apart from silence,
+  so stating it is never worse for you than staying quiet.
+
+The same outcome is the right one on the after-hook for a call you decided and then dropped:
+`session.report({ actionId, decisionId, outcome: "NOT_ATTEMPTED" })`.
+
 ## The job a run belongs to, and what it was allowed
 
 Two optional fields on the open, and the only two facts Heron's wire could not carry at all until
@@ -403,6 +437,8 @@ The root export carries the vendor surface:
   `mayExecute(verdict, effect?)` takes the decision's `effect`, so a declared shadow window runs the
   call without the vendor keeping a switch of its own (below).
 - `openGuardedSession`, `reduce`, `resolveContract`, `defineContract`, `derivedSessionStore`, `memorySessionStore` — the guard layer.
+  `session.reportUnattempted(call)` records a call your own side refused before the guard was asked;
+  `UnattemptedReport` is what it hands back.
 - `SIGNAL_KEYS`, `SIGNAL_KEY_LIST`, `SignalKey` — the signal vocabulary.
 - `INTENT_PROMPT`, `INTENT_PROMPT_HASH`, `INTENT_PROMPT_VERSION`, `buildIntentQuestion`,
   `parseIntentAnswer`, `intentSignals`, `stripMeasured` — the fork: the question the SDK owns, and

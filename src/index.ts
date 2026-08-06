@@ -54,6 +54,7 @@ export type {
   StepUpRequest,
   StepUpResolver,
   BlockedResult,
+  UnattemptedReport,
 } from "./vendor-guard";
 
 // The boundary contract: the one movable part of the seam, and its per-signal metadata.
