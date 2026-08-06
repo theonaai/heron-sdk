@@ -185,14 +185,36 @@ export interface ReductionCtx<A> {
  *
  *   - keep    — allowlist of arg keys that travel (redacted). Everything else is dropped, so a field
  *               nobody listed cannot leak: invariant #6 enforced at the SDK layer, not per call.
- *   - anchors — arg keys that carry a recipient/anchor → tokenised on the edge, never sent raw.
+ *   - anchors — arg keys that carry a recipient/anchor → tokenised on the edge, never sent raw. A
+ *               key holding a *list* of them (`cc`, `bcc`, `extra_recipients`) is tokenised
+ *               entry by entry, which is the shape most send APIs actually use.
  *   - signals — the derivable:"none" facts only the vendor can know (src/lib/contract.ts). A pure
  *               function of the args and the request; scalars out.
+ *   - resource — the stable id of the object acted on, which is the only thing that can link two
+ *               sessions through the record they both touched. Opaque ids only.
  */
 export interface ToolContract<A = Record<string, unknown>> {
   keep?: (keyof A & string)[];
   anchors?: Partial<Record<keyof A & string, AnchorType>>;
   signals?: (ctx: ReductionCtx<A>) => Signals;
+  /**
+   * The stable id of the thing this call acts on — a thread id, an issue key, a document id.
+   *
+   * It is the only key that can link two sessions through a shared object: *this run and that one
+   * touched the same record* is a question nothing else in the wire can answer, and a reviewer
+   * asking "what else happened to this document" has no other handle. Heron hashes it into the chain
+   * record, so it cannot be restated later.
+   *
+   * **An opaque id, never an address or a title.** It is stored and published as given, and unlike
+   * `principal.ref` nothing at the door refuses one that looks like an email — so a calendar
+   * invitation keyed by attendee, or a document keyed by its name, would put exactly the thing
+   * anchors exist to tokenise on the wire in the clear. If the natural handle for a resource is not
+   * opaque, return nothing rather than a hash of your own: an unkeyed digest of a short title is not
+   * hiding it.
+   *
+   * Returning `undefined` is the ordinary case — most calls act on no nameable resource.
+   */
+  resource?: (ctx: ReductionCtx<A>) => string | undefined;
 }
 
 /**
@@ -251,12 +273,19 @@ export function defineContract<A>(contract: ToolContract<A>): ToolContract {
  * signal is a signed statement and "it depended on the object literal's key order" is not something
  * a vendor can answer for.
  */
-function specificity(key: string, call: { name: string; provider?: string; server?: string }): number | null {
+function specificity(
+  key: string,
+  call: { name: string; provider?: string; server?: string },
+): number | null {
   if (key === call.name) return 4;
-  if (key.startsWith("server:")) return call.server && key.slice(7) === call.server ? 2 : null;
-  if (key.startsWith("provider:")) return call.provider && key.slice(9) === call.provider ? 1 : null;
+  if (key.startsWith("server:"))
+    return call.server && key.slice(7) === call.server ? 2 : null;
+  if (key.startsWith("provider:"))
+    return call.provider && key.slice(9) === call.provider ? 1 : null;
   if (!key.includes("*")) return null;
-  const pattern = new RegExp(`^${key.split("*").map(escapeRegExp).join(".*")}$`);
+  const pattern = new RegExp(
+    `^${key.split("*").map(escapeRegExp).join(".*")}$`,
+  );
   return pattern.test(call.name) ? 3 : null;
 }
 
@@ -292,7 +321,8 @@ export function resolveContract(
   call: { name: string; provider?: string; server?: string },
   contracts: ContractMap,
 ): ToolContract {
-  const matches: Array<{ contract: ToolContract; rank: number; key: string }> = [];
+  const matches: Array<{ contract: ToolContract; rank: number; key: string }> =
+    [];
   for (const [key, contract] of Object.entries(contracts)) {
     const rank = specificity(key, call);
     if (rank !== null) matches.push({ contract, rank, key });
@@ -301,13 +331,20 @@ export function resolveContract(
   if (matches.length === 1) return matches[0]!.contract;
 
   matches.sort(
-    (a, b) => b.rank - a.rank || literals(b.key) - literals(a.key) || a.key.localeCompare(b.key),
+    (a, b) =>
+      b.rank - a.rank ||
+      literals(b.key) - literals(a.key) ||
+      a.key.localeCompare(b.key),
   );
 
   return {
     keep: matches.find((m) => m.contract.keep !== undefined)?.contract.keep,
-    anchors: matches.find((m) => m.contract.anchors !== undefined)?.contract.anchors,
-    signals: matches.find((m) => m.contract.signals !== undefined)?.contract.signals,
+    anchors: matches.find((m) => m.contract.anchors !== undefined)?.contract
+      .anchors,
+    signals: matches.find((m) => m.contract.signals !== undefined)?.contract
+      .signals,
+    resource: matches.find((m) => m.contract.resource !== undefined)?.contract
+      .resource,
   };
 }
 
@@ -320,7 +357,12 @@ export interface GuardedTool {
  * substitute a transport that runs the real engine. */
 export type GuardClient = Pick<
   HeronClient,
-  "anchor" | "shownTextHash" | "openSession" | "beforeAction" | "execution" | "closeSession"
+  | "anchor"
+  | "shownTextHash"
+  | "openSession"
+  | "beforeAction"
+  | "execution"
+  | "closeSession"
 >;
 
 /**
@@ -397,7 +439,10 @@ export function derivedSessionStore(): SessionStore {
         );
       }
       const digest = hashCanonical(`${sessionExternalId}:${callRef}`);
-      const hex = digest.slice(digest.indexOf(":") + 1, digest.indexOf(":") + 9);
+      const hex = digest.slice(
+        digest.indexOf(":") + 1,
+        digest.indexOf(":") + 9,
+      );
       // Masked to 31 bits: Heron stores seq as a signed 32-bit integer.
       const seq = parseInt(hex, 16) & 0x7fffffff;
       return { seq, prevHash: heads.get(sessionExternalId) };
@@ -520,7 +565,9 @@ export interface GuardOptions {
    * `FAILED` for it would put a claim about the world into a record that can only honestly carry
    * claims about the vendor's own conduct — `ABANDONED` is what that case is for.
    */
-  classifyError?: (error: unknown) => Extract<ExecutionOutcome, "FAILED" | "ABANDONED">;
+  classifyError?: (
+    error: unknown,
+  ) => Extract<ExecutionOutcome, "FAILED" | "ABANDONED">;
   /**
    * Where the after-statement goes. By default it is sent inline, which puts a network round-trip
    * on the path of a result the agent is already waiting for, and loses the statement outright if
@@ -656,8 +703,30 @@ export function reduce(
   }
   // Anchors win over `keep` for the same key: a recipient travels tokenised, never raw.
   for (const [key, type] of Object.entries(contract.anchors ?? {})) {
+    if (!type) continue;
     const value = args[key];
-    if (type && typeof value === "string") out[key] = anchor(type, value);
+    if (typeof value === "string") {
+      out[key] = anchor(type, value);
+      continue;
+    }
+    // A list of recipients is the ordinary shape, not an exotic one: `cc`, `bcc` and
+    // `extra_recipients` on an email are arrays, and so is every "send to these people" API worth
+    // guarding. Handling only strings dropped them silently — not raw (nothing crossed, so invariant
+    // #6 was never at risk), but *invisibly*: a message to one address in `to` and two hundred in
+    // `bcc` reached Heron as a single-recipient send, and the recipient comparison it exists for saw
+    // one name where the call named two hundred and one. Heron's own reader walks arrays already
+    // (`collectArgAnchors`), so the tokens land the moment they are sent.
+    //
+    // Non-string entries are dropped rather than passed through. An array of `{email}` objects is a
+    // shape this cannot tokenise, and copying it verbatim to preserve the length would put raw
+    // values on the wire under a key the contract promised was anchored — the one direction a
+    // reduction may never fail in. The count is not lost by it either: the edge classifier reads the
+    // *raw* arguments, so `recipient_count` is computed before any of this.
+    if (Array.isArray(value)) {
+      out[key] = value
+        .filter((item): item is string => typeof item === "string")
+        .map((item) => anchor(type, item));
+    }
   }
   return out;
 }
@@ -760,10 +829,13 @@ export interface GuardedSession {
  * `resolveStepUp` are there for a runtime whose control flow the wrapper cannot fit — which, for
  * anything that pauses for a human, is most of them.
  */
-export async function openGuardedSession(opts: GuardOptions): Promise<GuardedSession> {
+export async function openGuardedSession(
+  opts: GuardOptions,
+): Promise<GuardedSession> {
   const anchor = opts.heron.anchor.bind(opts.heron);
   const store = opts.store ?? memorySessionStore();
-  const resolveCall: CallResolver = opts.resolveCall ?? ((c) => ({ name: c.name, args: c.args }));
+  const resolveCall: CallResolver =
+    opts.resolveCall ?? ((c) => ({ name: c.name, args: c.args }));
   const deliver = opts.deliver ?? ((send: () => Promise<void>) => send());
 
   const opened = await opts.heron.openSession({
@@ -804,11 +876,17 @@ export async function openGuardedSession(opts: GuardOptions): Promise<GuardedSes
             principal: opts.principal,
             sessionExternalId: opts.sessionExternalId,
           });
-    const base = contract.signals?.({ args: call.args, request: opts.request, anchor }) ?? {};
+    const base =
+      contract.signals?.({ args: call.args, request: opts.request, anchor }) ??
+      {};
     // Merged as a plain map, not as `Signals`: the approval keys are a union there, and merging two
     // of its branches is exactly the thing the union forbids at a call site. Each contributor was
     // already type-checked as `Signals` where it was written, which is where the guarantee belongs.
-    const measured: Record<string, SignalValue | undefined> = { ...derived, ...base, ...extra };
+    const measured: Record<string, SignalValue | undefined> = {
+      ...derived,
+      ...base,
+      ...extra,
+    };
 
     // The model's claim goes UNDER every measurement, and only for dimensions no measurement spoke
     // to. It has to be this way round because a claim travels under the same key a measurement does:
@@ -820,7 +898,10 @@ export async function openGuardedSession(opts: GuardOptions): Promise<GuardedSes
       ? { ...stripMeasured(claim, measured), ...measured }
       : measured;
 
-    const { seq, prevHash } = await store.reserve(opts.sessionExternalId, callRef);
+    const { seq, prevHash } = await store.reserve(
+      opts.sessionExternalId,
+      callRef,
+    );
     const before = await opts.heron.beforeAction({
       sessionExternalId: opts.sessionExternalId,
       seq,
@@ -828,17 +909,31 @@ export async function openGuardedSession(opts: GuardOptions): Promise<GuardedSes
       args: call.args,
       argsRedacted,
       signals: Object.keys(signals).length > 0 ? signals : undefined,
+      // The wire has carried this since v1 and the guard never filled it, so every vendor using the
+      // documented path reported `resource_ref` on 0% of calls and read as having declined to send
+      // it. Same reduction context as `signals`, so a contract states it beside everything else it
+      // says about the call.
+      resourceRef: contract.resource?.({
+        args: call.args,
+        request: opts.request,
+        anchor,
+      }),
       prevHash,
       // The runtime's own id is the stable key across the retries it performs, which a
       // per-request value can never be.
-      idempotencyKey: callRef ? `action:${opts.sessionExternalId}:${callRef}` : undefined,
+      idempotencyKey: callRef
+        ? `action:${opts.sessionExternalId}:${callRef}`
+        : undefined,
     });
     await store.advance(opts.sessionExternalId, before.chain.record_hash);
     return before;
   }
 
   function interpret(before: BeforeActionResult): GuardDecision {
-    const ids = { actionId: before.action_id, decisionId: before.decision.decision_id };
+    const ids = {
+      actionId: before.action_id,
+      decisionId: before.decision.decision_id,
+    };
     const verdict = before.decision.verdict;
     const effect = before.decision.effect;
 
@@ -848,7 +943,8 @@ export async function openGuardedSession(opts: GuardOptions): Promise<GuardedSes
     // ours: a runtime that decided its own posture would report shadow truthfully on every call and
     // there would be no breach to find, which is why the declaration lives on Heron's side and
     // arrives here signed. An unreachable Heron says nothing at all, so it still fails closed.
-    if (effect === "advisory") return { kind: "run", verdict, rehearsed: true, ...ids };
+    if (effect === "advisory")
+      return { kind: "run", verdict, rehearsed: true, ...ids };
     if (verdict === "STEP_UP") return { kind: "step_up", ...ids };
     // MODIFY and DEFER are answers about what to submit *next*, not about waiting for a person.
     // Collapsing them into the step-up path — which is what treating "not ALLOW and not DENY" as a
@@ -872,12 +968,17 @@ export async function openGuardedSession(opts: GuardOptions): Promise<GuardedSes
    * site, where the universal reflex is to log it and carry on. That reflex is the bypass, so the
    * answer here is always an answer. `onError` is how the vendor still sees what happened.
    */
-  function unavailable(error: unknown, stage: string, tool?: string): GuardDecision {
+  function unavailable(
+    error: unknown,
+    stage: string,
+    tool?: string,
+  ): GuardDecision {
     opts.onError?.(error, { stage, tool });
     return {
       kind: "blocked",
       verdict: "UNAVAILABLE",
-      reason: error instanceof HeronUnavailableError ? error.message : String(error),
+      reason:
+        error instanceof HeronUnavailableError ? error.message : String(error),
       actionId: null,
       decisionId: null,
     };
@@ -889,7 +990,9 @@ export async function openGuardedSession(opts: GuardOptions): Promise<GuardedSes
     claim?: IntentSignals,
   ): Promise<GuardDecision> {
     try {
-      return interpret(await submit(resolveCall(call), signals, call.id, claim));
+      return interpret(
+        await submit(resolveCall(call), signals, call.id, claim),
+      );
     } catch (error) {
       return unavailable(error, "decide", call.name);
     }
@@ -905,7 +1008,9 @@ export async function openGuardedSession(opts: GuardOptions): Promise<GuardedSes
    * `unknown` and the friction in place. An intent asker that could take a verdict down would have
    * made the safety feature a new outage.
    */
-  async function askIntent(calls: GuardedCall[]): Promise<Map<string, IntentSignals>> {
+  async function askIntent(
+    calls: GuardedCall[],
+  ): Promise<Map<string, IntentSignals>> {
     const claims = new Map<string, IntentSignals>();
     if (!opts.intent || calls.length === 0) return claims;
 
@@ -942,7 +1047,10 @@ export async function openGuardedSession(opts: GuardOptions): Promise<GuardedSes
    * arrival order under its own chain position, so their order here is not load-bearing — and the
    * decisions come back in the order the calls were given, whatever order they landed in.
    */
-  async function decideTurn(calls: GuardedCall[], signals?: Signals): Promise<GuardDecision[]> {
+  async function decideTurn(
+    calls: GuardedCall[],
+    signals?: Signals,
+  ): Promise<GuardDecision[]> {
     const claims = await askIntent(calls);
     return Promise.all(
       calls.map((call, index) =>
@@ -1041,7 +1149,11 @@ export async function openGuardedSession(opts: GuardOptions): Promise<GuardedSes
             outcome: "ESCALATED",
           });
           if (!opts.onStepUp) {
-            return blocked(decision.actionId, "STEP_UP", "no approval channel is configured");
+            return blocked(
+              decision.actionId,
+              "STEP_UP",
+              "no approval channel is configured",
+            );
           }
           const { approved, approver, shownText } = await opts.onStepUp({
             actionId: decision.actionId,
@@ -1060,7 +1172,9 @@ export async function openGuardedSession(opts: GuardOptions): Promise<GuardedSes
           const verdict =
             decision.kind === "blocked"
               ? decision.verdict
-              : { step_up: "STEP_UP", modify: "MODIFY", defer: "DEFER" }[decision.kind];
+              : { step_up: "STEP_UP", modify: "MODIFY", defer: "DEFER" }[
+                  decision.kind
+                ];
 
           // Every non-run answer is honoured the same way here — by not running — and each is
           // reported under the outcome that names what we did with it. The code carries the verdict
@@ -1122,12 +1236,17 @@ export async function openGuardedSession(opts: GuardOptions): Promise<GuardedSes
   };
 }
 
-function blocked(actionId: string | null, verdict: string, reason: string): BlockedResult {
+function blocked(
+  actionId: string | null,
+  verdict: string,
+  reason: string,
+): BlockedResult {
   return { heronBlocked: true, verdict, reason, actionId };
 }
 
 /** A short, non-sensitive label for why a tool threw. Never the message: it can carry arguments. */
 function errorCode(error: unknown): string {
-  if (error instanceof Error && error.name && error.name !== "Error") return error.name;
+  if (error instanceof Error && error.name && error.name !== "Error")
+    return error.name;
   return "tool_error";
 }
