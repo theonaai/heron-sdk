@@ -2,6 +2,24 @@
 
 ## 0.18.0
 
+### Added
+
+- **`resource` on a tool contract — the key that links two sessions through the object they both
+  touched.** `HeronClient.beforeAction` has accepted `resourceRef` since v1 and the guard never
+  filled it, so every vendor on the documented path reported `resource_ref` on **0%** of calls and
+  read as having declined to send it. It is now a function of the call, resolved with the same
+  specificity rules as `keep`/`anchors`/`signals`:
+
+  ```ts
+  "gmail.send": { resource: ({ args }) => String(args.thread_id) }
+  ```
+
+  **Opaque ids only.** It is stored and published as given, and unlike `principal.ref` nothing at
+  Heron's door refuses one that looks like an address — so a calendar entry keyed by attendee, or a
+  document keyed by its title, would put the very thing anchors exist to tokenise on the wire in the
+  clear. Where the natural handle is not opaque, return nothing rather than a digest of your own: an
+  unkeyed hash of a short title is not hiding it.
+
 ### Fixed
 
 - **An anchor over a *list* of recipients is tokenised, instead of being dropped.** `reduce()`

@@ -190,11 +190,31 @@ export interface ReductionCtx<A> {
  *               entry by entry, which is the shape most send APIs actually use.
  *   - signals — the derivable:"none" facts only the vendor can know (src/lib/contract.ts). A pure
  *               function of the args and the request; scalars out.
+ *   - resource — the stable id of the object acted on, which is the only thing that can link two
+ *               sessions through the record they both touched. Opaque ids only.
  */
 export interface ToolContract<A = Record<string, unknown>> {
   keep?: (keyof A & string)[];
   anchors?: Partial<Record<keyof A & string, AnchorType>>;
   signals?: (ctx: ReductionCtx<A>) => Signals;
+  /**
+   * The stable id of the thing this call acts on — a thread id, an issue key, a document id.
+   *
+   * It is the only key that can link two sessions through a shared object: *this run and that one
+   * touched the same record* is a question nothing else in the wire can answer, and a reviewer
+   * asking "what else happened to this document" has no other handle. Heron hashes it into the chain
+   * record, so it cannot be restated later.
+   *
+   * **An opaque id, never an address or a title.** It is stored and published as given, and unlike
+   * `principal.ref` nothing at the door refuses one that looks like an email — so a calendar
+   * invitation keyed by attendee, or a document keyed by its name, would put exactly the thing
+   * anchors exist to tokenise on the wire in the clear. If the natural handle for a resource is not
+   * opaque, return nothing rather than a hash of your own: an unkeyed digest of a short title is not
+   * hiding it.
+   *
+   * Returning `undefined` is the ordinary case — most calls act on no nameable resource.
+   */
+  resource?: (ctx: ReductionCtx<A>) => string | undefined;
 }
 
 /**
@@ -323,6 +343,8 @@ export function resolveContract(
       .anchors,
     signals: matches.find((m) => m.contract.signals !== undefined)?.contract
       .signals,
+    resource: matches.find((m) => m.contract.resource !== undefined)?.contract
+      .resource,
   };
 }
 
@@ -887,6 +909,15 @@ export async function openGuardedSession(
       args: call.args,
       argsRedacted,
       signals: Object.keys(signals).length > 0 ? signals : undefined,
+      // The wire has carried this since v1 and the guard never filled it, so every vendor using the
+      // documented path reported `resource_ref` on 0% of calls and read as having declined to send
+      // it. Same reduction context as `signals`, so a contract states it beside everything else it
+      // says about the call.
+      resourceRef: contract.resource?.({
+        args: call.args,
+        request: opts.request,
+        anchor,
+      }),
       prevHash,
       // The runtime's own id is the stable key across the retries it performs, which a
       // per-request value can never be.
