@@ -162,14 +162,24 @@ export function hashResult(result: unknown): string {
   return hashCanonical(result);
 }
 
-/** What a vendor may sign about what it did. See the wire schema for why ABANDONED exists. */
+/**
+ * What a vendor may sign about what it did. See the wire schema for why ABANDONED exists.
+ *
+ * `NOT_ATTEMPTED` is its opposite end: nothing was put into the world, and the reason was yours —
+ * your agent changed its mind, a person cancelled, one of your own limits refused the call. Say it
+ * rather than saying nothing: silence is published as `MISSING_EXECUTION`, a finding about your
+ * reporting raised over a call that never happened. It claims nothing about the verdict, so it can
+ * never stand in for `BLOCKED` — and Heron counts it apart from silence rather than with it, so
+ * stating it is never worse for you than staying quiet.
+ */
 export type ExecutionOutcome =
   | "EXECUTED"
   | "SKIPPED"
   | "FAILED"
   | "BLOCKED"
   | "ESCALATED"
-  | "ABANDONED";
+  | "ABANDONED"
+  | "NOT_ATTEMPTED";
 
 const DEFAULT_TIMEOUT_MS = 2000;
 const DEFAULT_RETRIES = 2;

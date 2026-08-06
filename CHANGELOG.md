@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.17.0
+
+### Added
+
+- **`NOT_ATTEMPTED`, and `session.reportUnattempted()` — the calls your own side stops.** Your
+  platform already refuses calls before Heron is asked: a rate limit, a budget, a tool a viewer may
+  not run, an agent that changed its mind between choosing the tool and reaching it. None of it
+  reaches the record — no action, no verdict, nothing to pair — so the safest thing your platform
+  does is the one thing it cannot show. On Theona's production that population is **1.9% of all
+  calls**.
+
+  - `reportUnattempted(call, { errorCode?, signals? })` submits the action the way `decide()` would
+    — same contract, same reduction, same edge classifier, so nothing crosses the boundary that
+    would not have crossed anyway — and files a `NOT_ATTEMPTED` statement against it.
+  - It returns an `UnattemptedReport`, **not** a `GuardDecision`. Every branch of that type is
+    something a caller acts on, and handing one back for a call that has already been refused is an
+    invitation to un-refuse it on a verdict nobody asked for. What you get instead is two ids for
+    your own logs and `wouldHaveBeen`: the verdict for a call nobody made. Read it as *what the
+    policy would have said* — an `ALLOW` means your own limit stopped something the published policy
+    permits, which is the cheap way to watch two rulebooks diverge.
+  - `NOT_ATTEMPTED` is also the right outcome on the after-hook for a call you decided and then
+    dropped, so `report()` takes it too.
+
+  **It fails the opposite way to everything else here, and that is deliberate.** `decide()` fails
+  closed because a run is waiting on its answer. Here the call is already not happening, so failing
+  closed could only break a refusal path that was working: an unreachable Heron costs you the row
+  and never a run, which is exactly what happens to every one of these calls today.
+
+  **Say it rather than saying nothing.** Silence is published as `MISSING_EXECUTION` — a finding
+  about your reporting, raised over a call that never happened, and a false row costs more than a
+  missing one where an accuracy figure is measured. `NOT_ATTEMPTED` claims nothing about the verdict,
+  so it can never stand in for `BLOCKED`; and Heron counts it in a bucket of its own rather than
+  folding it into silence, so stating it is never worse for you than staying quiet.
+
+  Needs a Heron that accepts the outcome (the app from 06.08.2026); an older one answers the
+  statement with a `400`, so that side goes first.
+
 ## 0.16.0
 
 ### Added

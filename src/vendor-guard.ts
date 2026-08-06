@@ -611,6 +611,28 @@ export type GuardDecision =
       pending: NonNullable<BeforeActionResult["decision"]["pending"]>;
     };
 
+/**
+ * What `reportUnattempted` filed, and what Heron would have said about it.
+ *
+ * Deliberately not a `GuardDecision`. That type is an answer to *may I run this*, and every branch
+ * of it is something a caller acts on — handing one back for a call that has already been refused
+ * is an invitation to un-refuse it on a verdict that was never asked for. This one is a receipt:
+ * two ids you can put in your own logs, and a verdict that is a measurement, not a permission.
+ */
+export interface UnattemptedReport {
+  /** The action Heron linked into the session chain, or null if it could not be reached. */
+  actionId: string | null;
+  decisionId: string | null;
+  /**
+   * The verdict Heron returned for a call that was never made — `null` if it did not answer.
+   *
+   * Read it as *what our policy would have said*, never as clearance. It is worth logging for one
+   * reason: an `ALLOW` here means your own limit stopped something the published policy permits, and
+   * a `DENY` means the two agree — which is the only cheap way to see the two rulebooks diverging.
+   */
+  wouldHaveBeen: string | null;
+}
+
 /** What a wrapped tool returns to the agent when Heron did not clear the action to run. */
 export interface BlockedResult {
   heronBlocked: true;
@@ -671,6 +693,38 @@ export interface GuardedSession {
     resultHash?: string | null;
     errorCode?: string | null;
   }): Promise<void>;
+  /**
+   * Record a call your side refused **before** the guard was ever asked, or gave up on afterwards.
+   *
+   * Your own limits already stop calls: a rate limit, a budget, a tool a viewer may not run, an
+   * agent that changed its mind between choosing the tool and reaching it. Today those calls exist
+   * in your logs and nowhere else — Heron has no action, no verdict and nothing to pair, so the
+   * safest thing your platform does is the one thing its record cannot show.
+   *
+   * This submits the action the way `decide()` would (same contract, same reduction, same edge
+   * classifier — no argument crosses that would not have crossed anyway) and immediately files a
+   * `NOT_ATTEMPTED` statement against it. What you get is a row that says *the agent asked for this,
+   * and it did not happen* — plus, in the return value, what Heron would have answered, which is how
+   * you find out whether your own limit is stricter or looser than the policy you publish.
+   *
+   * **Nothing is gated on it and nothing throws.** The call is already not happening, so an
+   * unreachable Heron costs you the row and never a run — the opposite of `decide()`, which fails
+   * closed because something is waiting on its answer. Call it after you have answered the model,
+   * not in front of it: it is two round trips, and the second one goes through `deliver`.
+   */
+  reportUnattempted(
+    call: GuardedCall,
+    extra?: {
+      /**
+       * A short label for why, in your own vocabulary — `rate_limited`, `budget_exhausted`,
+       * `viewer_not_permitted`. Free prose, never read by a rule: Heron judges its own record, and a
+       * verdict that turned on a string the audited party chooses would be a verdict it writes.
+       */
+      errorCode?: string;
+      /** Facts about this submission, exactly as `decide()` takes them. */
+      signals?: Signals;
+    },
+  ): Promise<UnattemptedReport>;
   /**
    * Answer a STEP_UP. Submits a *new* action naming the one it resolves — which is the only way an
    * approval enters the record — and returns its decision. Safe to call from a different process
@@ -918,6 +972,34 @@ export async function openGuardedSession(opts: GuardOptions): Promise<GuardedSes
     await deliver(send);
   }
 
+  async function reportUnattempted(
+    call: GuardedCall,
+    extra?: { errorCode?: string; signals?: Signals },
+  ): Promise<UnattemptedReport> {
+    try {
+      const before = await submit(resolveCall(call), extra?.signals, call.id);
+      await report({
+        actionId: before.action_id,
+        decisionId: before.decision.decision_id,
+        outcome: "NOT_ATTEMPTED",
+        errorCode: extra?.errorCode ?? null,
+      });
+      return {
+        actionId: before.action_id,
+        decisionId: before.decision.decision_id,
+        wouldHaveBeen: before.decision.verdict,
+      };
+    } catch (error) {
+      // Reported, not thrown, and deliberately not `unavailable()`: that helper answers the
+      // question "may this run", and there is no such question here — the call was already refused
+      // by the caller. An unreachable Heron costs the record one row, which is exactly what happens
+      // today for every one of these calls, so the failure mode is the status quo rather than a new
+      // one. Failing closed here could only mean breaking a refusal path that was working.
+      opts.onError?.(error, { stage: "reportUnattempted", tool: call.name });
+      return { actionId: null, decisionId: null, wouldHaveBeen: null };
+    }
+  }
+
   async function resolveStepUp(input: {
     actionId: string;
     call: { name: string; args: Record<string, unknown> };
@@ -1033,6 +1115,7 @@ export async function openGuardedSession(opts: GuardOptions): Promise<GuardedSes
     decide,
     decideTurn,
     report,
+    reportUnattempted,
     resolveStepUp,
     wrap,
     close: () => opts.heron.closeSession(opts.sessionExternalId),
