@@ -320,6 +320,11 @@ const contracts: ContractMap = {
 };
 ```
 
+An anchor key holding a **list** is tokenised entry by entry — `anchors: { to: "email", cc: "email",
+bcc: "email" }` covers the shape most send APIs use. An entry inside the list that is not a string is
+dropped rather than copied through: a key the contract calls an anchor never crosses raw, whatever
+shape it arrives in.
+
 `signals` are typed against `SignalKey` (`SIGNAL_KEYS`): a signal the classifier does not read will
 not compile. Each key's `derivable` field says whether Heron can fall back to deriving it from the
 tool name (`"full"`/`"partial"`) or whether the fact is pinned to your side (`"none"` — a recipient, a

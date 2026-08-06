@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.18.0
+
+### Fixed
+
+- **An anchor over a *list* of recipients is tokenised, instead of being dropped.** `reduce()`
+  handled only a string, so `cc`, `bcc` and `extra_recipients` — the shape almost every send API
+  actually uses — never crossed at all. Nothing leaked by it (a key that is not a string simply did
+  not travel), but the loss was invisible in the worst place: an email with one address in `to` and
+  two hundred in `bcc` reached Heron as a single-recipient send, and the recipient comparison anchors
+  exist for saw one name where the call named two hundred and one. Heron's reader already walks
+  arrays, so the tokens land the moment they are sent.
+
+  A non-string entry inside such a list is **dropped, not passed through**. Preserving the length by
+  copying the odd entry verbatim would put a raw value on the wire under a key the contract promised
+  was anchored — a reduction may fail by carrying less and never by carrying more. Nor is the count
+  lost: `recipient_count` is computed by the edge classifier from the *raw* arguments, before any
+  reduction happens.
+
 ## 0.17.0
 
 ### Added
