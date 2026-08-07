@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.19.0
+
+### Added
+
+- **`instructions` on the guard — the commitment sent once, not threaded through every call site.**
+  `instructionsHash()` has existed since 0.15.0 and the wire has accepted `instructions_hash` for as
+  long; what was missing was anywhere to put it that was not *every* `decide()` in the integration.
+  The first vendor to send it wrote its own `withInstructions()` wrapper around three call sites, and
+  every later one would have written the same thing.
+
+  ```ts
+  const session = await openGuardedSession({
+    // …
+    instructions: () => ({ system: agent.systemPrompt, plan: agent.planBlock }),
+  })
+  ```
+
+  It reaches all three doors an action goes through — `decide`/`decideTurn`, `resolveStepUp` and
+  `reportUnattempted` — because coverage is published per action, and a runtime committing on some
+  submissions and not others is exactly the shape that hides a rewrite.
+
+  **A function, not a value.** The slot is what changes: compaction rewrites it on most turns, and
+  that rewrite is the whole reason the commitment exists. Captured at open, it would publish
+  *unchanged* straight through one — a false statement about your own agent, in a record nobody can
+  correct afterwards.
+
+  It merges *under* everything else, so an explicit `signals.instructions_hash` still wins as the
+  narrower statement about that submission. It still feeds no rule (`instructions_hash` is outside
+  `SIGNAL_KEYS` by construction), and a throw from the callback is reported to `onError` and
+  swallowed — a diagnostic that gates nothing must not be able to fail a tool call.
+
 ## 0.18.0
 
 ### Added

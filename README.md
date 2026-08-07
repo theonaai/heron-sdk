@@ -640,7 +640,22 @@ rewrites the system prompt or the plan block mid-session is ordinary rather than
 that read an external page and then rewrote its own plan leaves exactly the trace of one that carried
 on, and nobody reading the evidence can tell.
 
-One scalar closes that:
+One scalar closes that. Hand the guard a way to read the slot, and every submission commits:
+
+```ts
+const session = await openGuardedSession({
+  // …
+  instructions: () => ({ system: agent.systemPrompt, plan: agent.planBlock }),
+})
+```
+
+A function rather than a value, because the slot is precisely the thing that moves: it is read per
+submission, so a rewrite between two calls is what reaches the wire. A value captured when the
+session opened would publish *unchanged* straight through a rewrite — worse than sending nothing,
+because it is a false statement about your own agent in a record nobody can correct.
+
+You can still send it per call, and an explicit signal wins as the narrower statement about that one
+submission:
 
 ```ts
 import { instructionsHash } from "@theonaai/heron-sdk"
