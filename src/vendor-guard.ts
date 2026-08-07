@@ -2,6 +2,7 @@ import type { SignalKey } from "./contract";
 import { hashCanonical } from "./crypto/hash";
 import type { SessionGrant, SessionTask } from "./delegation";
 import { classifyAtEdge, type EdgeClassifierOptions } from "./edge-classify";
+import { INSTRUCTIONS_SIGNAL, instructionsHash } from "./instructions";
 import {
   type IntentOptions,
   type IntentSignals,
@@ -578,6 +579,29 @@ export interface GuardOptions {
   /** Told about anything the guard swallowed — a failed delivery, an unreachable Heron. */
   onError?: (error: unknown, context: { stage: string; tool?: string }) => void;
   /**
+   * The agent's governing text, read once per submission and committed as `instructions_hash`
+   * (src/instructions.ts).
+   *
+   * A function rather than a value, because the slot is not constant: a runtime rewrites the system
+   * prompt and the plan block mid-session — compaction does it on most turns — and that rewrite is
+   * the entire thing the commitment exists to make visible. A value captured when the session opened
+   * would commit to the text as it was and publish *unchanged* through every rewrite, which is worse
+   * than sending nothing: it is a false statement about your own agent, in a record nobody can
+   * correct afterwards.
+   *
+   * Set it and every call commits, which is the coverage rule the digest is published under — send
+   * it on every action or accept that the figure says you did not. Without it the key is simply
+   * absent, and you can still pass `instructions_hash` yourself in a call's `signals`; an explicit
+   * one wins, since it is the narrower statement about that submission.
+   *
+   * It cannot move a verdict — the key is outside the classifier's vocabulary by construction, which
+   * is what stops *not setting this* from being a way to steer one.
+   *
+   * A throw here is swallowed and reported to `onError`, never propagated: a diagnostic that has not
+   * been asked to gate anything must not be able to fail a tool call the agent is waiting on.
+   */
+  instructions?: () => { system: string; plan?: string | null };
+  /**
    * The reference edge classifier (src/lib/edge-classify.ts): the arguments of every call are read
    * for the facts only this side can see — how many recipients, how many records — so a tool with no
    * `signals` of its own still asserts its magnitude instead of leaving it `unknown`. Always beaten
@@ -855,6 +879,28 @@ export async function openGuardedSession(
   // as a BROKEN_CHAIN indistinguishable from tampering. Writing genesis here resets it, every time.
   await store.advance(opts.sessionExternalId, opened.head_hash);
 
+  /**
+   * The commitment for this submission, or nothing.
+   *
+   * Placed *under* every other contributor in the merge: `instructions_hash` is a fact about the
+   * session rather than about this call, so a caller passing one explicitly is making the narrower
+   * statement and wins. Nothing else writes the key, so in practice this is a merge with an empty
+   * map — the ordering is there so it stays correct when that stops being true.
+   *
+   * Swallows a throw from the vendor's callback. The alternative is failing a tool call because a
+   * diagnostic could not read a string, which trades the thing the guard is for against the thing it
+   * reports on.
+   */
+  function committedInstructions(tool: string): Record<string, SignalValue> {
+    if (!opts.instructions) return {};
+    try {
+      return { [INSTRUCTIONS_SIGNAL]: instructionsHash(opts.instructions()) };
+    } catch (error) {
+      opts.onError?.(error, { stage: "instructions", tool });
+      return {};
+    }
+  }
+
   async function submit(
     call: ResolvedCall,
     extra?: Signals,
@@ -883,6 +929,7 @@ export async function openGuardedSession(
     // of its branches is exactly the thing the union forbids at a call site. Each contributor was
     // already type-checked as `Signals` where it was written, which is where the guarantee belongs.
     const measured: Record<string, SignalValue | undefined> = {
+      ...committedInstructions(call.name),
       ...derived,
       ...base,
       ...extra,
