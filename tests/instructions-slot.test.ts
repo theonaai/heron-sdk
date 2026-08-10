@@ -105,7 +105,7 @@ describe("the instruction slot", () => {
     ]);
   });
 
-  it("carries through the doors that are not decide()", async () => {
+  it("carries through the call that was never attempted", async () => {
     const heron = fakeHeron();
     const session = await open(heron, { instructions: () => BEFORE });
 
@@ -113,6 +113,21 @@ describe("the instruction slot", () => {
       { id: "c1", name: "gmail.send_email", args: {} },
       { errorCode: "budget_exhausted" },
     );
+
+    expect(heron.actions()[0]?.[INSTRUCTIONS_SIGNAL]).toBe(instructionsHash(BEFORE));
+  });
+
+  it("carries through the approval answer, which brings signals of its own", async () => {
+    // The third door, and the only one that submits with a `signals` object on every call.
+    const heron = fakeHeron();
+    const session = await open(heron, { instructions: () => BEFORE });
+
+    await session.resolveStepUp({
+      actionId: "act_1",
+      call: { name: "gmail.send_email", args: {} },
+      approved: true,
+      approver: "op_7",
+    });
 
     expect(heron.actions()[0]?.[INSTRUCTIONS_SIGNAL]).toBe(instructionsHash(BEFORE));
   });
@@ -130,12 +145,30 @@ describe("the instruction slot", () => {
     expect(heron.actions()[0]?.[INSTRUCTIONS_SIGNAL]).toBe(explicit);
   });
 
+  it("is not dropped by a signals object that only carries the key", async () => {
+    // The key is optional, so a caller that builds its signals from a value it did not have hands us
+    // `instructions_hash: undefined` — present, and stating nothing. Only a value wins over the
+    // commitment; carrying the key is not making the narrower statement.
+    const heron = fakeHeron();
+    const session = await open(heron, { instructions: () => BEFORE });
+
+    await session.decide(
+      { id: "c1", name: "crm.get_customer", args: {} },
+      { [INSTRUCTIONS_SIGNAL]: undefined },
+    );
+
+    expect(heron.actions()[0]?.[INSTRUCTIONS_SIGNAL]).toBe(instructionsHash(BEFORE));
+  });
+
   it("sends nothing when the option is not set", async () => {
     const heron = fakeHeron();
     const session = await open(heron);
 
     await session.decide({ id: "c1", name: "crm.get_customer", args: {} });
 
+    // Asserted on a submission that happened: an absent action would satisfy the key check on its
+    // own, and the test would then pass for the one reason it is there to rule out.
+    expect(heron.actions()).toHaveLength(1);
     expect(heron.actions()[0]?.[INSTRUCTIONS_SIGNAL]).toBeUndefined();
   });
 
@@ -156,5 +189,21 @@ describe("the instruction slot", () => {
     expect(decision.kind).toBe("run");
     expect(heron.actions()[0]?.[INSTRUCTIONS_SIGNAL]).toBeUndefined();
     expect(errors).toEqual([{ stage: "instructions", tool: "crm.get_customer" }]);
+  });
+
+  it("survives an onError that throws too, rather than failing the call on the report", async () => {
+    const heron = fakeHeron();
+    const session = await open(heron, {
+      instructions: () => {
+        throw new Error("no agent in scope");
+      },
+      onError: () => {
+        throw new Error("the vendor's logger is down");
+      },
+    });
+
+    const decision = await session.decide({ id: "c1", name: "crm.get_customer", args: {} });
+
+    expect(decision.kind).toBe("run");
   });
 });
