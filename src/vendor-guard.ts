@@ -883,9 +883,8 @@ export async function openGuardedSession(
    * The commitment for this submission, or nothing.
    *
    * Placed *under* every other contributor in the merge: `instructions_hash` is a fact about the
-   * session rather than about this call, so a caller passing one explicitly is making the narrower
-   * statement and wins. Nothing else writes the key, so in practice this is a merge with an empty
-   * map — the ordering is there so it stays correct when that stops being true.
+   * session rather than about this call, so a caller stating one explicitly is making the narrower
+   * statement and wins.
    *
    * Swallows a throw from the vendor's callback. The alternative is failing a tool call because a
    * diagnostic could not read a string, which trades the thing the guard is for against the thing it
@@ -896,7 +895,14 @@ export async function openGuardedSession(
     try {
       return { [INSTRUCTIONS_SIGNAL]: instructionsHash(opts.instructions()) };
     } catch (error) {
-      opts.onError?.(error, { stage: "instructions", tool });
+      // The report is a diagnostic as well, so it cannot be the thing that throws. An `onError` that
+      // fails here would turn the swallow into the exception it exists to prevent — UNAVAILABLE from
+      // `decide()`, a throw out of `reportUnattempted()` — on a callback that gates nothing.
+      try {
+        opts.onError?.(error, { stage: "instructions", tool });
+      } catch {
+        // Nothing left to report it to.
+      }
       return {};
     }
   }
@@ -929,11 +935,17 @@ export async function openGuardedSession(
     // of its branches is exactly the thing the union forbids at a call site. Each contributor was
     // already type-checked as `Signals` where it was written, which is where the guarantee belongs.
     const measured: Record<string, SignalValue | undefined> = {
-      ...committedInstructions(call.name),
       ...derived,
       ...base,
       ...extra,
     };
+    // Under every other contributor, but only where one has actually spoken. Spread first it would
+    // lose to a caller that merely *carries* the key: `instructions_hash` is optional on `Signals`,
+    // so `{ instructions_hash: undefined }` type-checks and would spread over the commitment and drop
+    // it — on precisely the calls that pass signals of their own, `resolveStepUp` among them.
+    if (measured[INSTRUCTIONS_SIGNAL] === undefined) {
+      Object.assign(measured, committedInstructions(call.name));
+    }
 
     // The model's claim goes UNDER every measurement, and only for dimensions no measurement spoke
     // to. It has to be this way round because a claim travels under the same key a measurement does:
