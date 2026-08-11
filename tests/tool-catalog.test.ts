@@ -11,7 +11,7 @@ import {
   type ToolCatalog,
   CATALOG_SIGNAL_KEYS,
   buildToolCatalog,
-  catalogAliasConflicts,
+  catalogConflicts,
   catalogHash,
   resolveCatalogEntry,
 } from "../src/tool-catalog";
@@ -122,6 +122,25 @@ describe("buildToolCatalog", () => {
     expect(catalog.tools[0]?.aliases).toEqual(["EXECUTE_AGENT", "execute_agent"]);
   });
 
+  it("refuses to canonicalise two entries for one tool", () => {
+    // Sorting is stable, so the pair would land in the vendor's enumeration order — the one thing
+    // this function exists to keep out of the bytes. Silently, it is two hashes for one registry
+    // and two answers to one question: one replica says `internal`, the other `external`. There is
+    // no honest canonical form to pick between entries that disagree, so it is raised at the
+    // vendor's own boot, by name, rather than published as a contradiction.
+    expect(() =>
+      buildToolCatalog([
+        { name: "mail.send", signals: { destination: "internal" } },
+        { name: "mail.send", signals: { destination: "external" } },
+      ]),
+    ).toThrow(/mail\.send/);
+
+    // Same name on one entry is not the case: repeating an alias, or naming itself, states nothing.
+    expect(() =>
+      buildToolCatalog([{ name: "mail.send", signals: {}, aliases: ["mail.send", "send", "send"] }]),
+    ).not.toThrow();
+  });
+
   it("carries only facts that are properties of the tool", () => {
     // A recipient count, an amount and a human's approval are facts about one *call*. Stating them
     // for a tool would assert them for every call it ever serves.
@@ -195,14 +214,14 @@ describe("resolveCatalogEntry", () => {
   });
 });
 
-describe("catalogAliasConflicts", () => {
+describe("catalogConflicts", () => {
   it("says nothing about a catalogue whose aliases all resolve", () => {
     const catalog = buildToolCatalog([
       { name: "EXECUTE_AGENT", signals: {}, aliases: ["execute_agent"] },
       { name: "mail.send", signals: {} },
     ]);
 
-    expect(catalogAliasConflicts(catalog)).toEqual([]);
+    expect(catalogConflicts(catalog)).toEqual({ refuse: [], report: [] });
   });
 
   it("names an alias two tools claim, so the vendor is refused rather than silently unmatched", () => {
@@ -211,21 +230,26 @@ describe("catalogAliasConflicts", () => {
       { name: "a.send", signals: {}, aliases: ["send"] },
     ]);
 
-    expect(catalogAliasConflicts(catalog)).toEqual([
-      { alias: "send", reason: "ambiguous", claimedBy: ["a.send", "b.send"] },
-    ]);
+    expect(catalogConflicts(catalog)).toEqual({
+      refuse: [{ name: "send", reason: "ambiguous", claimedBy: ["a.send", "b.send"] }],
+      report: [],
+    });
   });
 
-  it("reports an alias shadowed by a live tool without calling the catalogue broken", () => {
-    // Resolution already decides this one, and refusing it would leave a vendor unable to publish
+  it("puts a shadowed alias in `report`, where refusing on a non-empty list cannot reach it", () => {
+    // The door-check the docstring describes is `if (refuse.length) return 400`. Written over one
+    // flat list it would reject this catalogue — the vendor whose old name is now a live tool,
+    // which the design requires accepting, since the alternative is being unable to publish
     // anything about their current tools until they tidy their rename history.
     const catalog = buildToolCatalog([
       { name: "legacy.send", signals: {} },
       { name: "mail.send", signals: {}, aliases: ["legacy.send"] },
     ]);
+    const { refuse, report } = catalogConflicts(catalog);
 
-    expect(catalogAliasConflicts(catalog)).toEqual([
-      { alias: "legacy.send", reason: "shadowed", claimedBy: ["mail.send"] },
+    expect(refuse).toEqual([]);
+    expect(report).toEqual([
+      { name: "legacy.send", reason: "shadowed", claimedBy: ["mail.send"] },
     ]);
   });
 
@@ -243,7 +267,7 @@ describe("catalogAliasConflicts", () => {
     };
 
     expect(resolveCatalogEntry(raw, "send")?.name).toBe("a.send");
-    expect(catalogAliasConflicts(raw)).toEqual([]);
+    expect(catalogConflicts(raw)).toEqual({ refuse: [], report: [] });
   });
 
   it("calls a double-claimed alias shadowed, not ambiguous, when a live tool answers it", () => {
@@ -257,9 +281,30 @@ describe("catalogAliasConflicts", () => {
     ]);
 
     expect(resolveCatalogEntry(catalog, "legacy.send")?.name).toBe("legacy.send");
-    expect(catalogAliasConflicts(catalog)).toEqual([
-      { alias: "legacy.send", reason: "shadowed", claimedBy: ["a.send", "b.send"] },
-    ]);
+    expect(catalogConflicts(catalog)).toEqual({
+      refuse: [],
+      report: [{ name: "legacy.send", reason: "shadowed", claimedBy: ["a.send", "b.send"] }],
+    });
+  });
+
+  it("refuses two entries for one tool, which only bytes we did not build can carry", () => {
+    // `buildToolCatalog` throws on this, so the door-check is the only place it can be met. Left
+    // standing, resolution answers whichever entry sorted first — the vendor's enumeration order,
+    // which is exactly what canonicalisation exists to keep out of the answer.
+    const raw: ToolCatalog = {
+      v: 1,
+      tools: [
+        { name: "mail.send", signals: { destination: "internal" } },
+        { name: "mail.send", signals: { destination: "external" } },
+      ],
+    };
+
+    expect(catalogConflicts(raw)).toEqual({
+      refuse: [
+        { name: "mail.send", reason: "duplicate_name", claimedBy: ["mail.send", "mail.send"] },
+      ],
+      report: [],
+    });
   });
 });
 

@@ -457,7 +457,7 @@ The root export carries the vendor surface:
 - `classifyAtEdge`, `EdgeClassifierOptions` — the reference classifier over a call's arguments.
 - `pseudonymWith`, `replaceAnchors`, `collectAnchors`, `ANCHOR_PATTERNS`, `AnchorType` — edge tokenisation.
 - `buildExecutionEvidencePayload`, `ExecutionEvidencePayload` — the statement you sign.
-- `buildToolCatalog`, `catalogHash`, `resolveCatalogEntry`, `catalogAliasConflicts`, `CatalogEntry` —
+- `buildToolCatalog`, `catalogHash`, `resolveCatalogEntry`, `catalogConflicts`, `CatalogEntry` —
   what your tools *are*.
 
 The signed-bytes core is also reachable through stable subpaths, for a consumer that recomputes a

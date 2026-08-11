@@ -32,11 +32,22 @@
   **alias claimed by two entries resolves to nothing** rather than to whichever sorted first — the
   call is then classified from its name, exactly as an unlisted tool is.
 
-- **`catalogAliasConflicts()`** — the aliases a catalogue states that cannot be honoured, so the
-  server can refuse an ambiguous one at the door instead of accepting a catalogue whose claims
-  silently do not resolve. It sits beside the resolution it protects: a second copy of this rule on
-  the server is one refactor away from disagreeing with what a reviewer's `resolveCatalogEntry`
-  reads.
+- **`catalogConflicts()`** — what a catalogue states that cannot be honoured, so the server can
+  refuse a broken one at the door instead of storing claims that silently do not resolve. It sits
+  beside the resolution it protects: a second copy of this rule on the server is one refactor away
+  from disagreeing with what a reviewer's `resolveCatalogEntry` reads.
+
+  ```ts
+  const { refuse, report } = catalogConflicts(catalog)
+  if (refuse.length) return 400 // `ambiguous`, `duplicate_name`
+  for (const c of report) warn(c) // `shadowed` — honest to tell, wrong to refuse over
+  ```
+
+  **The fatal/advisory split is the return shape**, because the natural door-check over one flat
+  list — refuse if it is non-empty — would reject exactly the advisory case the design requires
+  accepting: the vendor whose retired name is now a live tool, who would otherwise be unable to
+  publish anything about their current tools until they tidy their rename history. A distinction the
+  server gets wrong by writing the obvious thing is a distinction stated in the wrong place.
 
 ### Fixed
 
@@ -62,10 +73,22 @@
   was judged under. It is worth knowing before it appears on an evidence page, where a new catalogue
   beside identical claims otherwise reads as a vendor quietly restating itself.
 
-- **`catalogAliasConflicts()` reads a catalogue it did not build the way resolution reads it.** It
+- **`catalogConflicts()` reads a catalogue it did not build the way resolution reads it.** It
   runs over whatever bytes arrived, so it now applies the same de-duplication and self-name filter
   as canonicalisation: a hand-signed catalogue repeating an alias, or naming its own tool, is no
   longer refused as `ambiguous` over something `resolveCatalogEntry` answers without difficulty.
+
+- **`buildToolCatalog()` throws on two entries for one tool**, the only input it refuses. Sorting is
+  stable, so such a pair landed in the vendor's enumeration order — the one thing canonicalisation
+  exists to keep out of the bytes. Silently, that is two hashes for one registry and two answers to
+  one question: `buildToolCatalog([internal, external])` and the same pair reversed hash differently,
+  and `resolveCatalogEntry` then answers `internal` on one replica and `external` on the other. The
+  same machine-dependence this release removes for collation, arriving through the registry instead.
+
+  There is no honest canonical form to choose here — the entries disagree, and picking between them
+  would be inventing the fact rather than stating it. So it is raised at the vendor's own boot, by
+  name, where it is cheapest to see and fix. `catalogConflicts()` reports it as `duplicate_name` in
+  `refuse` for the bytes it did not build, which is now the only way one can arrive.
 
 - **An alias that is both double-claimed and shadowed is reported as `shadowed`, not `ambiguous`.**
   A live tool's own name already decides the resolution before the alias pass is reached, so the

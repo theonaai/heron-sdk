@@ -134,11 +134,12 @@ export type { ExecutionEvidencePayload } from "./statements";
 export {
   CATALOG_SIGNAL_KEYS,
   buildToolCatalog,
-  catalogAliasConflicts,
+  catalogConflicts,
   catalogHash,
   resolveCatalogEntry,
 } from "./tool-catalog";
 export type {
+  CatalogConflict,
   CatalogEntry,
   CatalogSignalKey,
   CatalogSignals,
