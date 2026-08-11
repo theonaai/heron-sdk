@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.20.0
+
+### Added
+
+- **`aliases` on a catalogue entry — the other names a tool has arrived under, said by the vendor
+  rather than guessed on receipt.** The catalogue joins to an action by exact name, because the name
+  is what the vendor signed. So a vendor that renames a tool leaves its old traffic undescribed
+  forever: renaming forward reaches nothing that already ran. Measured on one production window,
+  that was 2 919 calls across 85 tools missing the catalogue on letter case alone —
+  `execute_agent` against `EXECUTE_AGENT` being 1 410 of them by itself.
+
+  ```ts
+  await client.publishToolCatalog([
+    { name: "EXECUTE_AGENT", signals: { op: "execute" }, aliases: ["execute_agent"] },
+  ])
+  ```
+
+  The alternative was normalising both sides on receipt, and it is what this key exists to avoid:
+  matching a signed name loosely is how a signature stops meaning anything, and it would merge two
+  tools a vendor deliberately spells apart. An alias is still an exact comparison — against a name
+  the vendor put inside the bytes they signed, dated by the catalogue that carries it and published
+  to the reviewer with everything else.
+
+  **A `v: 1` addition, not a format break.** A catalogue stating no aliases canonicalises to the
+  bytes it always did, so every `catalog_hash` a receipt already names still resolves.
+
+  Two rules decide the cases where an alias could attach the wrong facts to a call, and
+  `resolveCatalogEntry` is pure and total under both: a **live tool always beats somebody else's
+  alias** (a retired name later reused by a different tool gets that tool's own entry), and an
+  **alias claimed by two entries resolves to nothing** rather than to whichever sorted first — the
+  call is then classified from its name, exactly as an unlisted tool is.
+
+- **`catalogAliasConflicts()`** — the aliases a catalogue states that cannot be honoured, so the
+  server can refuse an ambiguous one at the door instead of accepting a catalogue whose claims
+  silently do not resolve. It sits beside the resolution it protects: a second copy of this rule on
+  the server is one refactor away from disagreeing with what a reviewer's `resolveCatalogEntry`
+  reads.
+
 ## 0.19.0
 
 ### Added

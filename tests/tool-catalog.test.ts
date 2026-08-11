@@ -8,8 +8,10 @@ import {
 import { hashCanonical } from "../src/crypto/hash";
 import { HeronClient } from "../src/vendor-sdk";
 import {
+  type ToolCatalog,
   CATALOG_SIGNAL_KEYS,
   buildToolCatalog,
+  catalogAliasConflicts,
   catalogHash,
   resolveCatalogEntry,
 } from "../src/tool-catalog";
@@ -68,6 +70,43 @@ describe("buildToolCatalog", () => {
     expect(entry?.signals).toEqual({ op: "delete", reversibility: "costly" });
   });
 
+  it("leaves a catalogue that states no aliases byte-for-byte as it was", () => {
+    // The reason this is a `v: 1` addition and not a format break. Every receipt already issued
+    // names a `catalog_hash`; if an added optional changed the bytes of a catalogue that does not
+    // use it, every one of those receipts would name a catalogue nobody can reproduce.
+    const before: ToolCatalog = {
+      v: 1,
+      tools: [{ name: "a.tool", signals: { op: "read" } }],
+    };
+
+    expect(buildToolCatalog([{ name: "a.tool", signals: { op: "read" } }])).toEqual(before);
+    expect(buildToolCatalog([{ name: "a.tool", signals: { op: "read" }, aliases: [] }])).toEqual(
+      before,
+    );
+    expect(catalogHash(buildToolCatalog([{ name: "a.tool", signals: { op: "read" } }]))).toBe(
+      catalogHash(before),
+    );
+  });
+
+  it("sorts and de-duplicates aliases, and drops the tool's own name from them", () => {
+    // Same facts, same bytes — the alias list comes out of a vendor's rename history, which is even
+    // less likely to have a stable order than their tool registry. Its own name is a statement with
+    // no content.
+    const a = buildToolCatalog([
+      {
+        name: "EXECUTE_AGENT",
+        signals: {},
+        aliases: ["run_agent", "execute_agent", "run_agent", "EXECUTE_AGENT"],
+      },
+    ]);
+    const b = buildToolCatalog([
+      { name: "EXECUTE_AGENT", signals: {}, aliases: ["execute_agent", "run_agent"] },
+    ]);
+
+    expect(a.tools[0]?.aliases).toEqual(["execute_agent", "run_agent"]);
+    expect(catalogHash(a)).toBe(catalogHash(b));
+  });
+
   it("carries only facts that are properties of the tool", () => {
     // A recipient count, an amount and a human's approval are facts about one *call*. Stating them
     // for a tool would assert them for every call it ever serves.
@@ -99,6 +138,80 @@ describe("resolveCatalogEntry", () => {
 
   it("answers nothing when no catalogue is published", () => {
     expect(resolveCatalogEntry(null, "ATTIO_FIND_RECORD")).toBeNull();
+  });
+
+  it("resolves a name the vendor declared as an alias of this tool", () => {
+    // The rename case: `EXECUTE_AGENT` is what the vendor calls it today, `execute_agent` is what
+    // 1 410 calls in the 10.08 window actually arrived under, and no rename going forward can reach
+    // them.
+    const renamed = buildToolCatalog([
+      { name: "EXECUTE_AGENT", signals: { op: "execute" }, aliases: ["execute_agent"] },
+    ]);
+
+    expect(resolveCatalogEntry(renamed, "execute_agent")?.name).toBe("EXECUTE_AGENT");
+    expect(resolveCatalogEntry(renamed, "EXECUTE_AGENT")?.name).toBe("EXECUTE_AGENT");
+    expect(resolveCatalogEntry(renamed, "delete_agent")).toBeNull();
+  });
+
+  it("gives a live tool its own entry, never an alias somebody else claimed", () => {
+    // A vendor retires `legacy.send` and later ships a different tool under that name. Inheriting
+    // the old tool's `destination: internal` would attach a fact to calls it was never about — the
+    // one way an alias could make a verdict quietly wrong.
+    const catalog = buildToolCatalog([
+      { name: "legacy.send", signals: { destination: "external" } },
+      { name: "mail.send", signals: { destination: "internal" }, aliases: ["legacy.send"] },
+    ]);
+
+    expect(resolveCatalogEntry(catalog, "legacy.send")?.signals).toEqual({
+      destination: "external",
+    });
+  });
+
+  it("answers nothing when two tools claim the same alias", () => {
+    // Pure and total: a reviewer runs this offline over whatever was published. Picking the first
+    // match would make the answer depend on sort order — a detail nobody signed. `null` says the
+    // true thing, and the call falls back to being classified from its name.
+    const catalog = buildToolCatalog([
+      { name: "a.send", signals: { op: "send" }, aliases: ["send"] },
+      { name: "b.send", signals: { op: "write" }, aliases: ["send"] },
+    ]);
+
+    expect(resolveCatalogEntry(catalog, "send")).toBeNull();
+  });
+});
+
+describe("catalogAliasConflicts", () => {
+  it("says nothing about a catalogue whose aliases all resolve", () => {
+    const catalog = buildToolCatalog([
+      { name: "EXECUTE_AGENT", signals: {}, aliases: ["execute_agent"] },
+      { name: "mail.send", signals: {} },
+    ]);
+
+    expect(catalogAliasConflicts(catalog)).toEqual([]);
+  });
+
+  it("names an alias two tools claim, so the vendor is refused rather than silently unmatched", () => {
+    const catalog = buildToolCatalog([
+      { name: "b.send", signals: {}, aliases: ["send"] },
+      { name: "a.send", signals: {}, aliases: ["send"] },
+    ]);
+
+    expect(catalogAliasConflicts(catalog)).toEqual([
+      { alias: "send", reason: "ambiguous", claimedBy: ["a.send", "b.send"] },
+    ]);
+  });
+
+  it("reports an alias shadowed by a live tool without calling the catalogue broken", () => {
+    // Resolution already decides this one, and refusing it would leave a vendor unable to publish
+    // anything about their current tools until they tidy their rename history.
+    const catalog = buildToolCatalog([
+      { name: "legacy.send", signals: {} },
+      { name: "mail.send", signals: {}, aliases: ["legacy.send"] },
+    ]);
+
+    expect(catalogAliasConflicts(catalog)).toEqual([
+      { alias: "legacy.send", reason: "shadowed", claimedBy: ["mail.send"] },
+    ]);
   });
 });
 

@@ -67,6 +67,22 @@ export interface CatalogSignals {
 export interface CatalogEntry {
   /** The tool name exactly as it arrives on an action — the join key, so it must match verbatim. */
   name: string;
+  /**
+   * Other names this same tool has arrived under — *the vendor's statement*, not our guess.
+   *
+   * A vendor that renames a tool leaves its old traffic behind permanently: the join is verbatim
+   * because the name is what they signed, so renaming forward describes nothing that already ran.
+   * Measured on Theona's 10.08 window, that is 2 919 calls across 85 tools missing the catalogue on
+   * letter case alone — `execute_agent` against `EXECUTE_AGENT` being 1 410 of them.
+   *
+   * The alternative was normalising on receipt (lowercase both sides, strip separators), and it is
+   * the thing this key exists to avoid: matching a signed name loosely is how a signature stops
+   * meaning anything, and it would silently merge two tools a vendor deliberately spells apart. So
+   * the vendor says it instead — "this tool was also known as X" — inside the bytes they sign, dated
+   * by the catalogue it arrives in and published to the reviewer with everything else. Being wrong
+   * about an alias is then a claim someone can find, exactly like being wrong about `data_class`.
+   */
+  aliases?: string[];
   /** Absent keys are not claimed; an empty entry states nothing and is legal. */
   signals: CatalogSignals;
   /** The vendor's own routing, when it has it. Recorded for the reviewer, never matched on. */
@@ -89,21 +105,35 @@ export interface ToolCatalog {
  * like a change, and a real change is indistinguishable from a re-ordering. A vendor whose tool
  * registry iterates a map has no stable order to offer, and must not be publishing a "change"
  * because of it.
+ *
+ * `aliases` gets the same treatment for the same reason — sorted, de-duplicated, and dropped
+ * entirely when it says nothing. That last part is what keeps this a `v: 1` addition rather than a
+ * format break: a catalogue stating no aliases canonicalises to the bytes it always did, so every
+ * hash a receipt already names still resolves to the catalogue it named.
  */
 export function buildToolCatalog(entries: readonly CatalogEntry[]): ToolCatalog {
   const tools = [...entries]
     .sort((a, b) => a.name.localeCompare(b.name))
-    .map((entry) => ({
-      name: entry.name,
-      signals: Object.fromEntries(
-        CATALOG_SIGNAL_KEYS.filter((key) => entry.signals[key] !== undefined).map((key) => [
-          key,
-          entry.signals[key],
-        ]),
-      ) as CatalogSignals,
-      ...(entry.provider ? { provider: entry.provider } : {}),
-      ...(entry.server ? { server: entry.server } : {}),
-    }));
+    .map((entry) => {
+      // A tool listing its own name as an alias is a statement with no content; keeping it would put
+      // two spellings of "nothing changed" into the hash.
+      const aliases = [...new Set(entry.aliases ?? [])]
+        .filter((alias) => alias !== entry.name)
+        .sort((a, b) => a.localeCompare(b));
+
+      return {
+        name: entry.name,
+        ...(aliases.length ? { aliases } : {}),
+        signals: Object.fromEntries(
+          CATALOG_SIGNAL_KEYS.filter((key) => entry.signals[key] !== undefined).map((key) => [
+            key,
+            entry.signals[key],
+          ]),
+        ) as CatalogSignals,
+        ...(entry.provider ? { provider: entry.provider } : {}),
+        ...(entry.server ? { server: entry.server } : {}),
+      };
+    });
   return { v: 1, tools };
 }
 
@@ -113,18 +143,78 @@ export function catalogHash(catalog: ToolCatalog): string {
 }
 
 /**
- * What the catalogue says about one tool, by exact name.
+ * What the catalogue says about one tool: by exact name, and failing that by an alias the vendor
+ * declared for it.
  *
  * Deliberately *not* the group-key matching the contract map uses (globs, `provider:`, `server:`).
  * That resolution is a convenience for writing a configuration; a catalogue is the *result* of
  * writing one — the vendor expands its own groups before signing, so what crosses is a statement
  * about each tool by name, and a reviewer applying the catalogue to a published action never has to
- * reimplement anyone's precedence rules to check it.
+ * reimplement anyone's precedence rules to check it. An alias does not weaken that: it is still an
+ * exact string comparison against a name the vendor signed, only against a name they said belongs
+ * to this tool as well.
+ *
+ * Two passes, and the order is the whole point. **A live name always beats somebody else's alias**,
+ * so a vendor that retires `X` and later ships a genuinely different tool called `X` gets the new
+ * tool's own entry — never the old one's inherited description, which is the one way an alias could
+ * quietly attach the wrong facts to a call.
+ *
+ * **An alias claimed by two entries resolves to nothing.** This function is pure and total by
+ * contract: a reviewer runs it offline over whatever bytes were published, including a catalogue
+ * whose aliases contradict each other. Picking the first match there would make the answer depend on
+ * sort order, which is to say on a detail nobody signed; answering `null` says what is actually
+ * true — the catalogue does not determine this tool — and leaves the call classified from its name,
+ * exactly as an unlisted tool is. `PUT /v1/tool-catalog` refuses such a catalogue at the door, so
+ * this branch is the reviewer's guarantee rather than the normal path.
  */
 export function resolveCatalogEntry(
   catalog: ToolCatalog | null,
   toolName: string,
 ): CatalogEntry | null {
   if (!catalog) return null;
-  return catalog.tools.find((entry) => entry.name === toolName) ?? null;
+
+  const byName = catalog.tools.find((entry) => entry.name === toolName);
+  if (byName) return byName;
+
+  const byAlias = catalog.tools.filter((entry) => entry.aliases?.includes(toolName));
+  return byAlias.length === 1 ? (byAlias[0] ?? null) : null;
+}
+
+/**
+ * The aliases a catalogue states that cannot be honoured, with why — the check `PUT
+ * /v1/tool-catalog` runs before it stores anything.
+ *
+ * It lives here, next to the resolution it protects, because the two have to agree about what an
+ * alias means; a server-side copy of this rule is one refactor away from accepting a catalogue the
+ * reviewer's `resolveCatalogEntry` then reads differently. Empty means every alias resolves.
+ *
+ * `shadowed` is reported and *not* an error: a vendor whose old name is now a live tool has stated
+ * something we simply cannot honour, and the resolution above already says which side wins. It is
+ * worth telling them; it is not worth refusing a catalogue over, because the alternative is a vendor
+ * unable to publish anything about their current tools until they clean up their history.
+ */
+export function catalogAliasConflicts(catalog: ToolCatalog): Array<{
+  alias: string;
+  reason: "ambiguous" | "shadowed";
+  claimedBy: string[];
+}> {
+  const claims = new Map<string, string[]>();
+  for (const entry of catalog.tools) {
+    for (const alias of entry.aliases ?? []) {
+      claims.set(alias, [...(claims.get(alias) ?? []), entry.name]);
+    }
+  }
+
+  const names = new Set(catalog.tools.map((entry) => entry.name));
+  const conflicts: Array<{ alias: string; reason: "ambiguous" | "shadowed"; claimedBy: string[] }> =
+    [];
+  for (const [alias, claimedBy] of claims) {
+    if (claimedBy.length > 1) {
+      conflicts.push({ alias, reason: "ambiguous", claimedBy: [...claimedBy].sort() });
+    } else if (names.has(alias)) {
+      conflicts.push({ alias, reason: "shadowed", claimedBy });
+    }
+  }
+
+  return conflicts.sort((a, b) => a.alias.localeCompare(b.alias));
 }

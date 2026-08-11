@@ -457,7 +457,8 @@ The root export carries the vendor surface:
 - `classifyAtEdge`, `EdgeClassifierOptions` — the reference classifier over a call's arguments.
 - `pseudonymWith`, `replaceAnchors`, `collectAnchors`, `ANCHOR_PATTERNS`, `AnchorType` — edge tokenisation.
 - `buildExecutionEvidencePayload`, `ExecutionEvidencePayload` — the statement you sign.
-- `buildToolCatalog`, `catalogHash`, `resolveCatalogEntry`, `CatalogEntry` — what your tools *are*.
+- `buildToolCatalog`, `catalogHash`, `resolveCatalogEntry`, `catalogAliasConflicts`, `CatalogEntry` —
+  what your tools *are*.
 
 The signed-bytes core is also reachable through stable subpaths, for a consumer that recomputes a
 receipt or a chain from the published bundle — this is how the Heron app and `verify-receipt` reuse
@@ -540,6 +541,32 @@ Three rules worth knowing before you write one:
   evidence page shows those separately, and only the second is a bug.
 - **A `200` does not mean it verified.** A bad signature is stored and reported rather than rejected —
   refusing it would delete the evidence that a vendor's signing is broken. Read `signature_valid`.
+
+### If you have ever renamed a tool, say so — `aliases`
+
+The join is by exact name, because the name is what you signed. So renaming a tool forward describes
+nothing that already ran: every call under the old spelling stays undescribed permanently, and your
+coverage number reads as a gap you cannot close by fixing your registry. One production window had
+2 919 calls across 85 tools missing the catalogue on **letter case alone**.
+
+```ts
+await heron.publishToolCatalog([
+  { name: "EXECUTE_AGENT", signals: { op: "execute" }, aliases: ["execute_agent"] },
+])
+```
+
+Heron will not normalise names on receipt to paper over this, and you should not want it to: matching
+a signed name loosely is how a signature stops meaning anything, and it would merge two tools you
+spell apart on purpose. An alias is still an exact comparison — against a name **you** put in the
+bytes you signed.
+
+Two rules, so an alias can never quietly attach the wrong facts to a call:
+
+- **A live tool always wins.** If you retire `legacy.send` and later ship a different tool under that
+  name, calls to it get the new tool's own entry, never the alias.
+- **An alias two tools claim resolves to nothing**, and Heron rejects such a catalogue rather than
+  storing claims that silently do not resolve. Aliases are also sorted and de-duplicated before
+  hashing, so the order your rename history happens to iterate in is not a change to publish.
 
 ## When a model is the one saying it
 
