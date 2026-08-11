@@ -1,5 +1,6 @@
 import type { SignalKey } from "./contract";
 import { hashCanonical } from "./crypto/hash";
+import { byCodeUnit } from "./order";
 import type { DataClass, Destination, Operation, Reversibility } from "./policy/taxonomy";
 
 /**
@@ -94,21 +95,6 @@ export interface ToolCatalog {
   v: 1;
   /** Sorted by name, so two vendors stating the same facts produce the same hash. */
   tools: CatalogEntry[];
-}
-
-/**
- * Order strings by UTF-16 code unit — `Array#sort`'s own default, and the order `canonicalize()`
- * puts object keys in (`./crypto/jcs`).
- *
- * Deliberately *not* `localeCompare()`. Its answer depends on the host's ICU locale and build:
- * `EXECUTE_AGENT` and `execute_agent` swap places between a default locale and `da_DK`, and a
- * runtime built `--without-intl` degrades to code units anyway. A sort that feeds a signature has to
- * be a property of the strings, not of the machine that happened to run it — otherwise two replicas
- * stating identical facts canonicalise to different bytes, which is a different `catalog_hash`, a
- * different `catalog:<hash>` idempotency key, and a published "change" that is only a re-ordering.
- */
-function byCodeUnit(a: string, b: string): number {
-  return a < b ? -1 : a > b ? 1 : 0;
 }
 
 /**

@@ -53,6 +53,15 @@
   reproducible across hosts to begin with, and re-publishing it on boot restores it under a hash
   every replica now agrees on.
 
+  **Expect one catalogue "change" that changed nothing**, on any vendor whose names mix case — which
+  is the common case, and certainly the vendor this release was written for: `EXECUTE_AGENT`,
+  `execute_agent`, `ATTIO_FIND_RECORD` and `attio_find_record` sort into a different order than
+  before. The first publish after upgrading writes a new catalogue row and moves the project's
+  pointer to it while asserting exactly the same facts. Nothing already issued is affected — rows are
+  immutable and never deleted, so every `catalog_hash` a receipt names still resolves to the bytes it
+  was judged under. It is worth knowing before it appears on an evidence page, where a new catalogue
+  beside identical claims otherwise reads as a vendor quietly restating itself.
+
 - **`catalogAliasConflicts()` reads a catalogue it did not build the way resolution reads it.** It
   runs over whatever bytes arrived, so it now applies the same de-duplication and self-name filter
   as canonicalisation: a hand-signed catalogue repeating an alias, or naming its own tool, is no
@@ -62,6 +71,18 @@
   A live tool's own name already decides the resolution before the alias pass is reached, so the
   fatal reason was refusing catalogues over a case that carries no ambiguity — the same vendor
   stranded on their rename history that the non-fatal rule exists to release.
+
+- **`resolveContract()` breaks a tie by code unit as well**, for a reason one step past the
+  catalogue's: this order does not feed a hash, it decides **which contract wins** — and with it
+  `keep`, the allowlist saying what may leave the vendor's boundary at all. Under `localeCompare()`
+  two builds of Node disagreed about that. `ATTIO*FIND_RECORD` and `ATTIO_FIND_RECOR*` both match
+  `ATTIO_FIND_RECORD` with sixteen literal characters each, and every ICU locale orders that pair the
+  opposite way from a runtime built `--without-intl`; the two replicas would then send different
+  fields for the same call. The tie is reachable only between globs — an exact name is unique, and
+  `server:`/`provider:` keys match by equality, so at most one of each can match a call.
+
+  A vendor whose contract map has no two equally specific keys for one tool — which is most of
+  them — resolves exactly as before.
 
 ## 0.19.0
 

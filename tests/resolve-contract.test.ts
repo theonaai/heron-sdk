@@ -67,6 +67,32 @@ describe("resolveContract", () => {
     expect(a.signals?.({} as never)).toEqual({ data_class: "narrow" });
   });
 
+  it("breaks a tie by code unit, so the answer does not depend on the host's ICU", () => {
+    // Two globs matching one call with 16 literal characters each — the only shape the tie-break is
+    // reachable in, since an exact name is unique and `server:`/`provider:` match by equality.
+    // `localeCompare` orders this pair the opposite way from a runtime built `--without-intl`, which
+    // has no ICU to ask, so the disagreement is between two builds of Node rather than two
+    // countries. What the tie selects is `keep` — the allowlist deciding what leaves the vendor's
+    // boundary at all — so the two builds would send different fields for the same call.
+    const call = { name: "ATTIO_FIND_RECORD" };
+    const star = { keep: ["star"], signals: signals("star") };
+    const tail = { keep: ["tail"], signals: signals("tail") };
+
+    const written = resolveContract(call, {
+      "ATTIO*FIND_RECORD": star,
+      "ATTIO_FIND_RECOR*": tail,
+    });
+    const reversed = resolveContract(call, {
+      "ATTIO_FIND_RECOR*": tail,
+      "ATTIO*FIND_RECORD": star,
+    });
+
+    // `*` (0x2A) sorts before `_` (0x5F) by code unit, on every host and in every build.
+    expect(written.keep).toEqual(["star"]);
+    expect(reversed.keep).toEqual(["star"]);
+    expect(written.signals?.({} as never)).toEqual({ data_class: "star" });
+  });
+
   it("lets a narrow key add a field without dropping the group's signals", () => {
     // The merge is per field, not per contract. Whole-contract precedence would lose `data_class` on
     // exactly the one tool that got a `keep` — a signal vanishing because an unrelated field was
