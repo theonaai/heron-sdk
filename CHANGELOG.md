@@ -1,5 +1,112 @@
 # Changelog
 
+## 0.20.0
+
+### Added
+
+- **`aliases` on a catalogue entry — the other names a tool has arrived under, said by the vendor
+  rather than guessed on receipt.** The catalogue joins to an action by exact name, because the name
+  is what the vendor signed. So a vendor that renames a tool leaves its old traffic undescribed
+  forever: renaming forward reaches nothing that already ran. Measured on one production window,
+  that was 2 919 calls across 85 tools missing the catalogue on letter case alone —
+  `execute_agent` against `EXECUTE_AGENT` being 1 410 of them by itself.
+
+  ```ts
+  await client.publishToolCatalog([
+    { name: "EXECUTE_AGENT", signals: { op: "execute" }, aliases: ["execute_agent"] },
+  ])
+  ```
+
+  The alternative was normalising both sides on receipt, and it is what this key exists to avoid:
+  matching a signed name loosely is how a signature stops meaning anything, and it would merge two
+  tools a vendor deliberately spells apart. An alias is still an exact comparison — against a name
+  the vendor put inside the bytes they signed, dated by the catalogue that carries it and published
+  to the reviewer with everything else.
+
+  **A `v: 1` addition, not a format break.** A catalogue stating no aliases canonicalises to the
+  bytes it always did, so every `catalog_hash` a receipt already names still resolves.
+
+  Two rules decide the cases where an alias could attach the wrong facts to a call, and
+  `resolveCatalogEntry` is pure and total under both: a **live tool always beats somebody else's
+  alias** (a retired name later reused by a different tool gets that tool's own entry), and an
+  **alias claimed by two entries resolves to nothing** rather than to whichever sorted first — the
+  call is then classified from its name, exactly as an unlisted tool is.
+
+- **`catalogConflicts()`** — what a catalogue states that cannot be honoured, so the server can
+  refuse a broken one at the door instead of storing claims that silently do not resolve. It sits
+  beside the resolution it protects: a second copy of this rule on the server is one refactor away
+  from disagreeing with what a reviewer's `resolveCatalogEntry` reads.
+
+  ```ts
+  const { refuse, report } = catalogConflicts(catalog)
+  if (refuse.length) return 400 // `ambiguous`, `duplicate_name`
+  for (const c of report) warn(c) // `shadowed` — honest to tell, wrong to refuse over
+  ```
+
+  **The fatal/advisory split is the return shape**, because the natural door-check over one flat
+  list — refuse if it is non-empty — would reject exactly the advisory case the design requires
+  accepting: the vendor whose retired name is now a live tool, who would otherwise be unable to
+  publish anything about their current tools until they tidy their rename history. A distinction the
+  server gets wrong by writing the obvious thing is a distinction stated in the wrong place.
+
+### Fixed
+
+- **A catalogue's canonical bytes no longer depend on the host's locale.** `buildToolCatalog()`
+  sorted tool names with `localeCompare()`, which answers from the runtime's ICU locale and build:
+  a default locale orders `execute_agent` before `EXECUTE_AGENT`, `da_DK` disagrees, and a runtime
+  built `--without-intl` degrades to code units. Two replicas stating identical facts could
+  therefore reach different bytes — a different `catalog_hash`, a different idempotency key, and a
+  published "change" that was only a re-ordering. Sorting is now by UTF-16 code unit, the order
+  `canonicalize()` already puts object keys in.
+
+  A catalogue whose names collate the same either way — which is any catalogue not mixing case or
+  separators at the sort boundary — hashes exactly as before. One that does not was never
+  reproducible across hosts to begin with, and re-publishing it on boot restores it under a hash
+  every replica now agrees on.
+
+  **Expect one catalogue "change" that changed nothing**, on any vendor whose names mix case — which
+  is the common case, and certainly the vendor this release was written for: `EXECUTE_AGENT`,
+  `execute_agent`, `ATTIO_FIND_RECORD` and `attio_find_record` sort into a different order than
+  before. The first publish after upgrading writes a new catalogue row and moves the project's
+  pointer to it while asserting exactly the same facts. Nothing already issued is affected — rows are
+  immutable and never deleted, so every `catalog_hash` a receipt names still resolves to the bytes it
+  was judged under. It is worth knowing before it appears on an evidence page, where a new catalogue
+  beside identical claims otherwise reads as a vendor quietly restating itself.
+
+- **`catalogConflicts()` reads a catalogue it did not build the way resolution reads it.** It
+  runs over whatever bytes arrived, so it now applies the same de-duplication and self-name filter
+  as canonicalisation: a hand-signed catalogue repeating an alias, or naming its own tool, is no
+  longer refused as `ambiguous` over something `resolveCatalogEntry` answers without difficulty.
+
+- **`buildToolCatalog()` throws on two entries for one tool**, the only input it refuses. Sorting is
+  stable, so such a pair landed in the vendor's enumeration order — the one thing canonicalisation
+  exists to keep out of the bytes. Silently, that is two hashes for one registry and two answers to
+  one question: `buildToolCatalog([internal, external])` and the same pair reversed hash differently,
+  and `resolveCatalogEntry` then answers `internal` on one replica and `external` on the other. The
+  same machine-dependence this release removes for collation, arriving through the registry instead.
+
+  There is no honest canonical form to choose here — the entries disagree, and picking between them
+  would be inventing the fact rather than stating it. So it is raised at the vendor's own boot, by
+  name, where it is cheapest to see and fix. `catalogConflicts()` reports it as `duplicate_name` in
+  `refuse` for the bytes it did not build, which is now the only way one can arrive.
+
+- **An alias that is both double-claimed and shadowed is reported as `shadowed`, not `ambiguous`.**
+  A live tool's own name already decides the resolution before the alias pass is reached, so the
+  fatal reason was refusing catalogues over a case that carries no ambiguity — the same vendor
+  stranded on their rename history that the non-fatal rule exists to release.
+
+- **`resolveContract()` breaks a tie by code unit as well**, for a reason one step past the
+  catalogue's: this order does not feed a hash, it decides **which contract wins** — and with it
+  `keep`, the allowlist saying what may leave the vendor's boundary at all. Under `localeCompare()`
+  two builds of Node disagreed about that. `ATTIO*FIND_RECORD` and `ATTIO_FIND_RECOR*` both match
+  `ATTIO_FIND_RECORD` with sixteen literal characters each, and every ICU locale orders that pair the
+  opposite way from a runtime built `--without-intl`; the two replicas would then send different
+  fields for the same call. The tie is reachable only between globs — an exact name is unique, and
+  `server:`/`provider:` keys match by equality, so at most one of each can match a call.
+
+  A vendor whose contract map has no two equally specific keys for one tool — which is most of
+  them — resolves exactly as before.
+
 ## 0.19.0
 
 ### Added

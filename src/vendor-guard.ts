@@ -11,6 +11,7 @@ import {
   parseIntentAnswer,
   stripMeasured,
 } from "./policy/intent";
+import { byCodeUnit } from "./order";
 import type { AnchorType } from "./pseudonym-core";
 import {
   type BeforeActionResult,
@@ -315,6 +316,18 @@ function literals(key: string): number {
  * Exact name > glob (more literal characters first) > `server:` > `provider:`, and equal specificity
  * is broken by the key's own ordering so the answer never depends on how the map was written.
  *
+ * That tie-break is by **code unit** (`./order`), which is the same argument one step further: an
+ * order read off the host's ICU build makes the answer depend on the machine rather than on the map
+ * — and what it selects is `keep`, the allowlist deciding what leaves the vendor's boundary at all.
+ * Two replicas of one service would send different fields for the same call, which is invariant #6
+ * turned into a deployment detail. Not hypothetical: `ATTIO*FIND_RECORD` and `ATTIO_FIND_RECOR*`
+ * both match `ATTIO_FIND_RECORD` with 16 literals each, and `localeCompare` orders that pair the
+ * opposite way from a runtime built `--without-intl`, which has no ICU to ask and falls back to code
+ * units.
+ *
+ * It is reachable only between two **globs** — an exact name is unique, and `server:`/`provider:`
+ * match by equality, so at most one key of each can ever match one call.
+ *
  * Linear in the number of *contracts*, which is the point of group keys: a platform with 2000 tools
  * writes a dozen of these, not two thousand.
  */
@@ -335,7 +348,7 @@ export function resolveContract(
     (a, b) =>
       b.rank - a.rank ||
       literals(b.key) - literals(a.key) ||
-      a.key.localeCompare(b.key),
+      byCodeUnit(a.key, b.key),
   );
 
   return {

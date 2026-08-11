@@ -131,8 +131,15 @@ export type { ExecutionEvidencePayload } from "./statements";
 
 // The tool catalogue: what each tool *is*, signed once and published — so a classification does not
 // have to be inferred from a name the vendor chose.
-export { CATALOG_SIGNAL_KEYS, buildToolCatalog, catalogHash, resolveCatalogEntry } from "./tool-catalog";
+export {
+  CATALOG_SIGNAL_KEYS,
+  buildToolCatalog,
+  catalogConflicts,
+  catalogHash,
+  resolveCatalogEntry,
+} from "./tool-catalog";
 export type {
+  CatalogConflict,
   CatalogEntry,
   CatalogSignalKey,
   CatalogSignals,
