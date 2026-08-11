@@ -38,6 +38,31 @@
   the server is one refactor away from disagreeing with what a reviewer's `resolveCatalogEntry`
   reads.
 
+### Fixed
+
+- **A catalogue's canonical bytes no longer depend on the host's locale.** `buildToolCatalog()`
+  sorted tool names with `localeCompare()`, which answers from the runtime's ICU locale and build:
+  a default locale orders `execute_agent` before `EXECUTE_AGENT`, `da_DK` disagrees, and a runtime
+  built `--without-intl` degrades to code units. Two replicas stating identical facts could
+  therefore reach different bytes — a different `catalog_hash`, a different idempotency key, and a
+  published "change" that was only a re-ordering. Sorting is now by UTF-16 code unit, the order
+  `canonicalize()` already puts object keys in.
+
+  A catalogue whose names collate the same either way — which is any catalogue not mixing case or
+  separators at the sort boundary — hashes exactly as before. One that does not was never
+  reproducible across hosts to begin with, and re-publishing it on boot restores it under a hash
+  every replica now agrees on.
+
+- **`catalogAliasConflicts()` reads a catalogue it did not build the way resolution reads it.** It
+  runs over whatever bytes arrived, so it now applies the same de-duplication and self-name filter
+  as canonicalisation: a hand-signed catalogue repeating an alias, or naming its own tool, is no
+  longer refused as `ambiguous` over something `resolveCatalogEntry` answers without difficulty.
+
+- **An alias that is both double-claimed and shadowed is reported as `shadowed`, not `ambiguous`.**
+  A live tool's own name already decides the resolution before the alias pass is reached, so the
+  fatal reason was refusing catalogues over a case that carries no ambiguity — the same vendor
+  stranded on their rename history that the non-fatal rule exists to release.
+
 ## 0.19.0
 
 ### Added

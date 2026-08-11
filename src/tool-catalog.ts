@@ -97,6 +97,35 @@ export interface ToolCatalog {
 }
 
 /**
+ * Order strings by UTF-16 code unit — `Array#sort`'s own default, and the order `canonicalize()`
+ * puts object keys in (`./crypto/jcs`).
+ *
+ * Deliberately *not* `localeCompare()`. Its answer depends on the host's ICU locale and build:
+ * `EXECUTE_AGENT` and `execute_agent` swap places between a default locale and `da_DK`, and a
+ * runtime built `--without-intl` degrades to code units anyway. A sort that feeds a signature has to
+ * be a property of the strings, not of the machine that happened to run it — otherwise two replicas
+ * stating identical facts canonicalise to different bytes, which is a different `catalog_hash`, a
+ * different `catalog:<hash>` idempotency key, and a published "change" that is only a re-ordering.
+ */
+function byCodeUnit(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/**
+ * The aliases an entry actually states: de-duplicated, and without the entry's own name.
+ *
+ * Shared by the canonicalisation and the door-check on purpose. Saying a name twice says it once,
+ * and a tool listing its own name as an alias is a statement with no content — but the two functions
+ * only stay in agreement about that if they read the key through the same filter. They are not
+ * always reading a catalogue we built: `catalogAliasConflicts` runs over whatever bytes arrived, and
+ * a hand-signed one repeating an alias would otherwise be refused as `ambiguous` over a repetition
+ * `resolveCatalogEntry` reads straight through.
+ */
+function statedAliases(entry: CatalogEntry): string[] {
+  return [...new Set(entry.aliases ?? [])].filter((alias) => alias !== entry.name);
+}
+
+/**
  * Canonicalise a catalogue: sort the tools by name, keep only the catalogue keys, drop absent
  * optionals.
  *
@@ -113,13 +142,9 @@ export interface ToolCatalog {
  */
 export function buildToolCatalog(entries: readonly CatalogEntry[]): ToolCatalog {
   const tools = [...entries]
-    .sort((a, b) => a.name.localeCompare(b.name))
+    .sort((a, b) => byCodeUnit(a.name, b.name))
     .map((entry) => {
-      // A tool listing its own name as an alias is a statement with no content; keeping it would put
-      // two spellings of "nothing changed" into the hash.
-      const aliases = [...new Set(entry.aliases ?? [])]
-        .filter((alias) => alias !== entry.name)
-        .sort((a, b) => a.localeCompare(b));
+      const aliases = statedAliases(entry).sort(byCodeUnit);
 
       return {
         name: entry.name,
@@ -192,6 +217,12 @@ export function resolveCatalogEntry(
  * something we simply cannot honour, and the resolution above already says which side wins. It is
  * worth telling them; it is not worth refusing a catalogue over, because the alternative is a vendor
  * unable to publish anything about their current tools until they clean up their history.
+ *
+ * **`shadowed` is therefore tested first**, and that order is the rule, not a detail. An alias that
+ * is both claimed twice *and* the name of a live tool is not ambiguous: `resolveCatalogEntry` never
+ * reaches its alias pass, because the live name already answered. Reporting the fatal reason for a
+ * case resolution fully determines would refuse a catalogue over nothing — the same vendor stuck
+ * with their own rename history that the non-fatal rule exists to release.
  */
 export function catalogAliasConflicts(catalog: ToolCatalog): Array<{
   alias: string;
@@ -200,7 +231,7 @@ export function catalogAliasConflicts(catalog: ToolCatalog): Array<{
 }> {
   const claims = new Map<string, string[]>();
   for (const entry of catalog.tools) {
-    for (const alias of entry.aliases ?? []) {
+    for (const alias of statedAliases(entry)) {
       claims.set(alias, [...(claims.get(alias) ?? []), entry.name]);
     }
   }
@@ -209,12 +240,12 @@ export function catalogAliasConflicts(catalog: ToolCatalog): Array<{
   const conflicts: Array<{ alias: string; reason: "ambiguous" | "shadowed"; claimedBy: string[] }> =
     [];
   for (const [alias, claimedBy] of claims) {
-    if (claimedBy.length > 1) {
-      conflicts.push({ alias, reason: "ambiguous", claimedBy: [...claimedBy].sort() });
-    } else if (names.has(alias)) {
-      conflicts.push({ alias, reason: "shadowed", claimedBy });
+    if (names.has(alias)) {
+      conflicts.push({ alias, reason: "shadowed", claimedBy: [...claimedBy].sort(byCodeUnit) });
+    } else if (claimedBy.length > 1) {
+      conflicts.push({ alias, reason: "ambiguous", claimedBy: [...claimedBy].sort(byCodeUnit) });
     }
   }
 
-  return conflicts.sort((a, b) => a.alias.localeCompare(b.alias));
+  return conflicts.sort((a, b) => byCodeUnit(a.alias, b.alias));
 }

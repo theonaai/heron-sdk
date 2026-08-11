@@ -107,6 +107,21 @@ describe("buildToolCatalog", () => {
     expect(catalogHash(a)).toBe(catalogHash(b));
   });
 
+  it("sorts by code unit, so the bytes do not depend on the host's locale", () => {
+    // `localeCompare()` would answer from the host's ICU locale and build: a default locale orders
+    // `execute_agent` before `EXECUTE_AGENT`, `da_DK` disagrees, and `--without-intl` degrades to
+    // code units. Two replicas would then hash identical facts differently and publish a "change"
+    // that is only a re-ordering. Code units are a property of the strings — the assertions below
+    // are the order `localeCompare()` does *not* give.
+    const catalog = buildToolCatalog([
+      { name: "a.tool", signals: {} },
+      { name: "B.tool", signals: {}, aliases: ["execute_agent", "EXECUTE_AGENT"] },
+    ]);
+
+    expect(catalog.tools.map((entry) => entry.name)).toEqual(["B.tool", "a.tool"]);
+    expect(catalog.tools[0]?.aliases).toEqual(["EXECUTE_AGENT", "execute_agent"]);
+  });
+
   it("carries only facts that are properties of the tool", () => {
     // A recipient count, an amount and a human's approval are facts about one *call*. Stating them
     // for a tool would assert them for every call it ever serves.
@@ -211,6 +226,39 @@ describe("catalogAliasConflicts", () => {
 
     expect(catalogAliasConflicts(catalog)).toEqual([
       { alias: "legacy.send", reason: "shadowed", claimedBy: ["mail.send"] },
+    ]);
+  });
+
+  it("reads a catalogue it did not build the way resolution reads it", () => {
+    // The door-check runs over whatever bytes arrived, not over something `buildToolCatalog` just
+    // normalised. A hand-signed catalogue repeating an alias, or naming the tool itself, states
+    // nothing `resolveCatalogEntry` cannot answer — refusing it would be the two halves of this
+    // file disagreeing about what an alias means.
+    const raw: ToolCatalog = {
+      v: 1,
+      tools: [
+        { name: "a.send", signals: {}, aliases: ["send", "send", "a.send"] },
+        { name: "mail.send", signals: {} },
+      ],
+    };
+
+    expect(resolveCatalogEntry(raw, "send")?.name).toBe("a.send");
+    expect(catalogAliasConflicts(raw)).toEqual([]);
+  });
+
+  it("calls a double-claimed alias shadowed, not ambiguous, when a live tool answers it", () => {
+    // `resolveCatalogEntry` never reaches its alias pass here — `legacy.send` is a live name, and
+    // the name pass already decided. Reporting the fatal reason would refuse the catalogue over a
+    // case resolution fully determines, stranding the vendor on their own rename history.
+    const catalog = buildToolCatalog([
+      { name: "legacy.send", signals: {} },
+      { name: "b.send", signals: {}, aliases: ["legacy.send"] },
+      { name: "a.send", signals: {}, aliases: ["legacy.send"] },
+    ]);
+
+    expect(resolveCatalogEntry(catalog, "legacy.send")?.name).toBe("legacy.send");
+    expect(catalogAliasConflicts(catalog)).toEqual([
+      { alias: "legacy.send", reason: "shadowed", claimedBy: ["a.send", "b.send"] },
     ]);
   });
 });
