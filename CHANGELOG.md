@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.22.0
+
+### Added
+
+- **`detectCredentialWrite()` — a local warning when a credential-shaped value is about to be
+  written into instructions, memory or flow.** It recognises generic prefixed tokens, long
+  hex/base64-like values, and opaque URL path or query values without naming vendors. The bounded,
+  cycle-safe walk accepts structured writes, but the warning returns only target and shape
+  categories: never the match, source text, object path or an excerpt. It is deliberately not a
+  Heron signal, so inspected content stays at the edge and no policy rule can turn on a vendor-owned
+  heuristic.
+
 ## 0.20.0
 
 ### Added

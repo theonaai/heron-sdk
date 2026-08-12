@@ -715,6 +715,29 @@ than anyone's claim.
 It is testimony: you compute the digest over text Heron never sees, so it catches *inconsistency*,
 never fabrication. And it says *that* the instructions changed, never *what*.
 
+## Warning when durable agent state looks like a credential
+
+Instructions, memory and flow survive the call that wrote them. A credential copied into one of
+those slots is therefore handed to later runs, even when no tool argument ever carries it. Inspect
+the write at the edge, before saving it:
+
+```ts
+import { detectCredentialWrite } from "@theonaai/heron-sdk"
+
+const warning = detectCredentialWrite({ target: "instructions", value: update.instructions })
+if (warning) showWarning(warning)
+```
+
+The detector describes forms, not vendors: a short prefix and separator followed by a long opaque
+run, long hex/base64-like values, and opaque URL values in paths as well as query strings. It walks
+nested values, so the same call works for a structured flow or memory payload.
+
+The result contains only the target and shape categories. It never contains the match, source text,
+object path or an excerpt. This is also why it returns a local warning rather than a Heron signal:
+instruction content stays outside `SIGNAL_KEYS`, no inspected text crosses the boundary, and no rule
+can turn a heuristic owned by the audited vendor into a verdict. A warning asks a human to inspect
+the write; it does not refuse or modify it.
+
 ## Committing to what the human was shown
 
 A person approving is already the strongest thing in your record: a new action naming the step-up it
