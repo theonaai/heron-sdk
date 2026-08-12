@@ -76,6 +76,16 @@ export type {
   EdgeSignals,
 } from "./edge-classify";
 
+// A local, content-free warning for credentials being written into durable agent state. It is not
+// a policy signal: the inspected text stays on the vendor edge and no rule can turn on the result.
+export { detectCredentialWrite } from "./credential-write";
+export type {
+  CredentialShape,
+  CredentialWriteInput,
+  CredentialWriteTarget,
+  CredentialWriteWarning,
+} from "./credential-write";
+
 // The fork: ask your own model what it is about to do, and send the answer marked as testimony.
 // The question is ours and versioned; the asking is yours, because the session and the bill are.
 export {
