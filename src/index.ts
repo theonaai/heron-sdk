@@ -83,6 +83,8 @@ export {
   INTENT_PROMPT,
   INTENT_PROMPT_HASH,
   INTENT_PROMPT_VERSION,
+  INTENT_TAXONOMY,
+  INTENT_TAXONOMY_DOCUMENTATION,
   buildIntentQuestion,
   intentSignals,
   parseIntentAnswer,
