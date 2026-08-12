@@ -445,8 +445,9 @@ The root export carries the vendor surface:
   `session.reportUnattempted(call)` records a call your own side refused before the guard was asked;
   `UnattemptedReport` is what it hands back.
 - `SIGNAL_KEYS`, `SIGNAL_KEY_LIST`, `SignalKey` — the signal vocabulary.
-- `INTENT_PROMPT`, `INTENT_PROMPT_HASH`, `INTENT_PROMPT_VERSION`, `buildIntentQuestion`,
-  `parseIntentAnswer`, `intentSignals`, `stripMeasured` — the fork: the question the SDK owns, and
+- `INTENT_TAXONOMY`, `INTENT_TAXONOMY_DOCUMENTATION`, `INTENT_PROMPT`, `INTENT_PROMPT_HASH`,
+  `INTENT_PROMPT_VERSION`, `buildIntentQuestion`, `parseIntentAnswer`, `intentSignals`,
+  `stripMeasured` — the fork: the versioned vocabulary, generated question and documentation, and
   the parsing of what comes back. `session.decideTurn()` drives all of it.
 - `instructionsHash`, `INSTRUCTIONS_SIGNAL` — the commitment to your agent's governing text.
 - `shownTextHash`, `SHOWN_TEXT_SIGNAL` — the commitment to what a human was shown before approving.
@@ -602,10 +603,11 @@ const session = await openGuardedSession({
 const decisions = await session.decideTurn(calls)
 ```
 
-**The question is ours, and that is the point.** `INTENT_PROMPT` is a constant in this package, not a
-string assembled from your agent's system prompt, and `INTENT_PROMPT_HASH` travels on every claim —
-so a reviewer holding a receipt can look up exactly what was asked, from one published value. A judge
-that shares the attacker's channel is worth nothing if the attacker also writes the question.
+**The question is ours, and that is the point.** `INTENT_TAXONOMY` is the versioned source for the
+closed vocabulary and every definition. The SDK generates `INTENT_PROMPT`, the parser's accepted
+values, and the Markdown `INTENT_TAXONOMY_DOCUMENTATION` from it. `INTENT_PROMPT_HASH` travels on
+every claim, so a reviewer holding a receipt can look up exactly what was asked. Tool catalogue
+entries are never included in the question: the declaration remains an independent witness.
 
 **The turn is the unit, not the call.** `decide()` never asks; only `decideTurn()` does. A fork per
 call would multiply the cost by your fan-out and put the same question to the same context several
@@ -617,10 +619,13 @@ something unparseable costs the turn its claims and nothing else; the calls are 
 they would have been. That direction is deliberate: a claim only ever fills a dimension nothing else
 answered, so its absence leaves the dimension `unknown` and the friction in place.
 
-`parseIntentAnswer` is strict about values and forgiving about wrapping — a fenced code block or a
-bare array is fine, a value outside the closed vocabulary is dropped, and `"unknown"` is read as the
-model declining rather than as an answer. `magnitude` is never asked about at all: its signals are
-counts, and a count is a measurement `classifyAtEdge` reads off your arguments.
+`parseIntentAnswer` accepts the legacy fenced-object and bare-array wrappers, but v2 is atomic about
+content: every row must contain exactly `ref` and the four dimension fields. A missing or extra field,
+duplicate ref, or unsupported value rejects the whole answer. Valid rows outside the `refs` being
+parsed are ignored for compatibility with integrations that ask once per turn and parse per call.
+Taxonomy `"unknown"` is a valid decline for one dimension and produces no claim for that dimension.
+`magnitude` is never asked about: its signals are counts, and a count is a measurement
+`classifyAtEdge` reads off your arguments.
 
 ### Or send the claim yourself
 

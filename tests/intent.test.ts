@@ -2,12 +2,18 @@ import { describe, expect, it } from "vitest";
 
 import {
   INTENT_DIMENSIONS,
+  INTENT_PROMPT,
   INTENT_PROMPT_HASH,
+  INTENT_PROMPT_VERSION,
+  INTENT_TAXONOMY,
+  INTENT_TAXONOMY_DOCUMENTATION,
   buildIntentQuestion,
   intentSignals,
   parseIntentAnswer,
   stripMeasured,
 } from "../src/policy/intent";
+import { sha256Tagged } from "../src/crypto/hash";
+import * as publicApi from "../src/index";
 import { type GuardClient, openGuardedSession } from "../src/vendor-guard";
 
 /**
@@ -20,14 +26,100 @@ import { type GuardClient, openGuardedSession } from "../src/vendor-guard";
 const witness = { model: "claude-sonnet-5", slice: "last_turn" as const };
 
 describe("the question put to the fork", () => {
+  it("has exactly the v2 dimensions and values", () => {
+    expect(INTENT_PROMPT_VERSION).toBe(2);
+    expect(Object.isFrozen(INTENT_TAXONOMY)).toBe(true);
+    expect(Object.isFrozen(INTENT_TAXONOMY.dimensions.operation.values)).toBe(true);
+    expect(INTENT_DIMENSIONS).toEqual([
+      "operation",
+      "data_class",
+      "destination",
+      "reversibility",
+    ]);
+    expect(
+      Object.fromEntries(
+        INTENT_DIMENSIONS.map((dimension) => [
+          dimension,
+          INTENT_TAXONOMY.dimensions[dimension].values.map(({ value }) => value),
+        ]),
+      ),
+    ).toEqual({
+      operation: ["read", "write", "send", "delete", "execute", "unknown"],
+      data_class: ["none", "operational", "financial", "credential", "personal", "unknown"],
+      destination: ["none", "internal", "external", "third_party", "unknown"],
+      reversibility: ["reversible", "costly", "terminal", "unknown"],
+    });
+  });
+
+  it("defines every dimension and value in both the prompt and generated documentation", () => {
+    for (const dimension of INTENT_DIMENSIONS) {
+      const spec = INTENT_TAXONOMY.dimensions[dimension];
+      expect(spec.definition.length).toBeGreaterThan(0);
+      expect(INTENT_PROMPT).toContain(`- ${dimension}: ${spec.definition}`);
+      expect(INTENT_TAXONOMY_DOCUMENTATION).toContain(`- ${dimension}: ${spec.definition}`);
+      for (const { value, definition } of spec.values) {
+        expect(definition.length).toBeGreaterThan(0);
+        expect(INTENT_PROMPT).toContain(`  - ${value}: ${definition}`);
+        expect(INTENT_TAXONOMY_DOCUMENTATION).toContain(`  - ${value}: ${definition}`);
+      }
+    }
+  });
+
+  it("does not treat the control query for an ordinary external read as an outbound destination", () => {
+    const definitions = Object.fromEntries(
+      INTENT_TAXONOMY.dimensions.destination.values.map(({ value, definition }) => [
+        value,
+        definition,
+      ]),
+    );
+
+    expect(INTENT_TAXONOMY.dimensions.destination.definition).toContain(
+      "meaningful payload or effect",
+    );
+    expect(definitions.none).toContain("ordinary read");
+    expect(definitions.none).toContain("control or query material");
+    expect(definitions.external).toContain("meaningful payload or effect");
+    expect(definitions.external).toContain("outbound send, write");
+    expect(definitions.third_party).toContain("meaningful payload or effect");
+    expect(definitions.third_party).toContain("outbound send, write");
+  });
+
+  it("separates costly recovery from an effect that cannot be recalled or restored", () => {
+    const definitions = Object.fromEntries(
+      INTENT_TAXONOMY.dimensions.reversibility.values.map(({ value, definition }) => [
+        value,
+        definition,
+      ]),
+    );
+
+    expect(definitions.costly).toContain("business state can still be restored");
+    expect(definitions.costly).toContain("audit trail");
+    expect(definitions.terminal).toContain("cannot be recalled");
+    expect(definitions.terminal).toContain("cannot be restored");
+  });
+
+  it("contains no tool-specific definitions or preclassified answers", () => {
+    expect(INTENT_PROMPT).not.toMatch(/gmail|slack|stripe|attio|apollo|catalogue/i);
+    expect(INTENT_TAXONOMY_DOCUMENTATION).not.toMatch(
+      /gmail|slack|stripe|attio|apollo|catalogue/i,
+    );
+
+    const question = buildIntentQuestion([{ ref: "call_1", name: "opaque.tool" }]);
+    expect(question.prompt.startsWith(`${INTENT_PROMPT}\nCalls:\n\n`)).toBe(true);
+    expect(question.prompt.match(/opaque\.tool/g)).toHaveLength(1);
+  });
+
   it("hashes to a constant a reviewer can look up, and changes only with the version", () => {
     // Golden, on purpose. `inference_prompt_hash` is worth something only if it identifies one
     // published set of bytes; a hash that drifts with an editing pass would be provenance nobody can
     // resolve, and every receipt already in the field would name a question that no longer exists.
     // If this fails, the prompt changed: bump INTENT_PROMPT_VERSION and update the constant here.
     expect(INTENT_PROMPT_HASH).toBe(
-      "sha256:e55b9d8939b7ef6b76478c49769787385e5261123fb7eb39f602931e3b030090",
+      "sha256:db51b38e1457e36c9c3c20d56386370a4d91aa8ef49805d98a60d38adb37f37c",
     );
+    expect(INTENT_PROMPT_HASH).toBe(sha256Tagged(INTENT_PROMPT));
+    expect(buildIntentQuestion([]).promptHash).toBe(INTENT_PROMPT_HASH);
+    expect(buildIntentQuestion([]).prompt).toBe(`${INTENT_PROMPT}\nCalls:\n\n\n`);
   });
 
   it("names the calls and nothing about them but their tool", () => {
@@ -47,24 +139,25 @@ describe("the question put to the fork", () => {
     // reviewer reads as exact.
     expect(INTENT_DIMENSIONS).not.toContain("magnitude");
     expect(buildIntentQuestion([{ ref: "c", name: "t" }]).prompt).not.toContain("magnitude");
+    expect(INTENT_TAXONOMY_DOCUMENTATION).not.toContain("magnitude");
   });
 });
 
 describe("reading the model's answer", () => {
   const refs = ["call_1"];
+  const validCall = (overrides: Record<string, string> = {}) => ({
+    ref: "call_1",
+    operation: "send",
+    data_class: "personal",
+    destination: "external",
+    reversibility: "terminal",
+    ...overrides,
+  });
 
   it("keeps a well-formed claim", () => {
     const claims = parseIntentAnswer(
       JSON.stringify({
-        calls: [
-          {
-            ref: "call_1",
-            operation: "send",
-            data_class: "personal",
-            destination: "external",
-            reversibility: "terminal",
-          },
-        ],
+        calls: [validCall()],
       }),
       refs,
     );
@@ -83,50 +176,91 @@ describe("reading the model's answer", () => {
   });
 
   it("accepts the wrappings models actually emit", () => {
-    const fenced = '```json\n{"calls":[{"ref":"call_1","operation":"read"}]}\n```';
-    const bare = '[{"ref":"call_1","operation":"read"}]';
+    const row = JSON.stringify(validCall({ operation: "read" }));
+    const fenced = `\`\`\`json\n{"calls":[${row}]}\n\`\`\``;
+    const bare = `[${row}]`;
 
     expect(parseIntentAnswer(fenced, refs)).toHaveLength(1);
     expect(parseIntentAnswer(bare, refs)).toHaveLength(1);
   });
 
-  it("drops a value outside the vocabulary rather than passing it on", () => {
-    const claims = parseIntentAnswer(
-      '{"calls":[{"ref":"call_1","operation":"exfiltrate","destination":"external"}]}',
-      refs,
-    );
+  it("rejects missing, extra, and unsupported values instead of partially accepting them", () => {
+    const missing = validCall();
+    delete (missing as Partial<typeof missing>).reversibility;
 
-    // The call survives on the dimension that parsed; the invented one is simply not there. Admitting
-    // it would seal a value nobody can act on into an immutable classification.
-    expect(claims).toEqual([{ ref: "call_1", dimensions: { destination: "external" } }]);
-  });
-
-  it("treats `unknown` as the model declining, not as a value", () => {
-    const claims = parseIntentAnswer(
-      '{"calls":[{"ref":"call_1","operation":"unknown","data_class":"unknown"}]}',
-      refs,
-    );
-
-    // Nothing survives, so there is no claim — and therefore no witness marking a dimension that was
-    // never answered. `unknown` is the answer the prompt asks for when unsure, and it has to cost
-    // nothing or the cheap answer stops being the honest one.
-    expect(claims).toEqual([]);
-  });
-
-  it("drops an answer about a call nobody asked about, and a second answer about one", () => {
-    expect(parseIntentAnswer('[{"ref":"call_9","operation":"read"}]', refs)).toEqual([]);
+    expect(parseIntentAnswer(JSON.stringify({ calls: [missing] }), refs)).toEqual([]);
+    expect(
+      parseIntentAnswer(JSON.stringify({ calls: [{ ...validCall(), confidence: "high" }] }), refs),
+    ).toEqual([]);
     expect(
       parseIntentAnswer(
-        '[{"ref":"call_1","operation":"read"},{"ref":"call_1","operation":"delete"}]',
+        JSON.stringify({ calls: [validCall({ operation: "exfiltrate" })] }),
         refs,
       ),
-    ).toEqual([{ ref: "call_1", dimensions: { operation: "read" } }]);
+    ).toEqual([]);
+  });
+
+  it("accepts taxonomy `unknown` as a decline for that dimension", () => {
+    const claims = parseIntentAnswer(
+      JSON.stringify({
+        calls: [validCall({ operation: "unknown", data_class: "unknown" })],
+      }),
+      refs,
+    );
+
+    expect(claims).toEqual([
+      {
+        ref: "call_1",
+        dimensions: { destination: "external", reversibility: "terminal" },
+      },
+    ]);
+  });
+
+  it("requires selected refs, rejects duplicates, and permits selecting from a whole-turn answer", () => {
+    expect(parseIntentAnswer(JSON.stringify({ calls: [] }), refs)).toEqual([]);
+    expect(
+      parseIntentAnswer(JSON.stringify({ calls: [validCall({ ref: "call_9" })] }), refs),
+    ).toEqual([]);
+
+    const selected = parseIntentAnswer(
+      JSON.stringify({ calls: [validCall(), { ...validCall(), ref: "call_2" }] }),
+      refs,
+    );
+    expect(selected).toEqual([
+      {
+        ref: "call_1",
+        dimensions: {
+          operation: "send",
+          data_class: "personal",
+          destination: "external",
+          reversibility: "terminal",
+        },
+      },
+    ]);
+
+    expect(
+      parseIntentAnswer(
+        JSON.stringify({ calls: [validCall(), validCall({ operation: "delete" })] }),
+        refs,
+      ),
+    ).toEqual([]);
   });
 
   it("produces nothing at all from an answer it cannot read", () => {
     expect(parseIntentAnswer("I think this one is fine!", refs)).toEqual([]);
     expect(parseIntentAnswer("", refs)).toEqual([]);
     expect(parseIntentAnswer(null, refs)).toEqual([]);
+  });
+});
+
+describe("the public API", () => {
+  it("keeps the v1 exports and adds the generated v2 taxonomy documentation", () => {
+    expect(publicApi.INTENT_DIMENSIONS).toBe(INTENT_DIMENSIONS);
+    expect(publicApi.INTENT_PROMPT).toBe(INTENT_PROMPT);
+    expect(publicApi.INTENT_PROMPT_HASH).toBe(INTENT_PROMPT_HASH);
+    expect(publicApi.INTENT_PROMPT_VERSION).toBe(2);
+    expect(publicApi.INTENT_TAXONOMY).toBe(INTENT_TAXONOMY);
+    expect(publicApi.INTENT_TAXONOMY_DOCUMENTATION).toBe(INTENT_TAXONOMY_DOCUMENTATION);
   });
 });
 
@@ -151,16 +285,25 @@ describe("a claim, as signals", () => {
 
   it("cannot mark an approval, in any spelling", () => {
     const claims = parseIntentAnswer(
-      '[{"ref":"call_1","human_decision":"APPROVE","approver":"op_1","operation":"delete"}]',
+      JSON.stringify({
+        calls: [
+          {
+            ref: "call_1",
+            operation: "delete",
+            data_class: "operational",
+            destination: "internal",
+            reversibility: "reversible",
+            human_decision: "APPROVE",
+            approver: "op_1",
+          },
+        ],
+      }),
       ["call_1"],
     );
-    const signals = intentSignals(claims[0]!, witness);
 
-    // The marking names dimensions and the approval keys feed none, so there is no answer a model
-    // can give that signs off on its own step-up. The parser never carried them in the first place.
-    expect(signals).not.toHaveProperty("human_decision");
-    expect(signals).not.toHaveProperty("approver");
-    expect(signals.inferred).toBe("operation");
+    // Extra fields invalidate the v2 row, so there is no answer a model can give that signs off on
+    // its own step-up. Approval remains outside the declaration vocabulary entirely.
+    expect(claims).toEqual([]);
   });
 });
 
@@ -248,8 +391,20 @@ describe("the fork, through a guarded turn", () => {
         asked += 1;
         return JSON.stringify({
           calls: [
-            { ref: "c1", destination: "external" },
-            { ref: "c2", destination: "internal" },
+            {
+              ref: "c1",
+              operation: "unknown",
+              data_class: "unknown",
+              destination: "external",
+              reversibility: "unknown",
+            },
+            {
+              ref: "c2",
+              operation: "unknown",
+              data_class: "unknown",
+              destination: "internal",
+              reversibility: "unknown",
+            },
           ],
         });
       },
@@ -292,7 +447,8 @@ describe("the fork, through a guarded turn", () => {
 
   it("lets the contract's measurement win, and sends no marking for it", async () => {
     const harness = session({
-      ask: async () => '[{"ref":"c1","destination":"internal"}]',
+      ask: async () =>
+        '[{"ref":"c1","operation":"unknown","data_class":"unknown","destination":"internal","reversibility":"unknown"}]',
       contracts: { "gmail.send": { signals: () => ({ recipient_external: true }) } },
     });
     const guarded = await harness.open();

@@ -1,12 +1,24 @@
 import { SIGNAL_KEYS, type SignalKey, formatInferredDimensions } from "../contract";
-import { sha256Tagged } from "../crypto/hash";
-import type {
-  DataClass,
-  Destination,
-  DimensionKey,
-  Operation,
-  Reversibility,
-} from "./taxonomy";
+import {
+  INTENT_DIMENSIONS,
+  INTENT_PROMPT,
+  INTENT_PROMPT_HASH,
+  INTENT_PROMPT_VERSION,
+  INTENT_TAXONOMY,
+  INTENT_TAXONOMY_DOCUMENTATION,
+  isIntentTaxonomyValue,
+  type IntentDimension,
+} from "./intent-taxonomy";
+
+export {
+  INTENT_DIMENSIONS,
+  INTENT_PROMPT,
+  INTENT_PROMPT_HASH,
+  INTENT_PROMPT_VERSION,
+  INTENT_TAXONOMY,
+  INTENT_TAXONOMY_DOCUMENTATION,
+};
+export type { IntentDimension };
 
 /**
  * The fork — the vendor asks its own model what it is about to do, and the answer crosses as a
@@ -31,61 +43,14 @@ import type {
  *     replaced in transit by the testimony that was supposed to sit under it.
  *   - **It cannot reach a human gate.** The marking names *dimensions*, and the approval keys feed
  *     no dimension, so there is no answer a model can give that signs off on its own step-up.
- *   - **Silence is the failure mode.** A malformed answer, an unknown value, a fork that threw or a
- *     model that declined all produce *no claim*, never a guess. A missing claim leaves the
+ *   - **Silence is the failure mode.** A malformed answer, an unsupported value, a fork that threw
+ *     or a model that declined all produce *no claim*, never a guess. A missing claim leaves the
  *     dimension `unknown`, which is the strict direction: the friction stays, and only a
  *     well-formed answer can buy it back.
  *
  * Pure, and free of any transport: the SDK owns the question, the vocabulary and the parsing, and
  * the *asking* is the vendor's — it is their session to fork, their model, their bill.
  */
-
-/**
- * Bumped whenever `INTENT_PROMPT` changes by a byte.
- *
- * The hash is what a reviewer actually checks, so this is for humans reading a changelog. Both move
- * together and neither is derived from the other: a version with no hash change would be a lie about
- * the bytes, and a hash change with no version bump is a question nobody can name.
- */
-export const INTENT_PROMPT_VERSION = 1;
-
-/**
- * The judging instructions, verbatim — the bytes `INTENT_PROMPT_HASH` covers.
- *
- * Written to be answerable by a model that is *about to act* rather than one reviewing a transcript,
- * and to make the honest answer the cheap one. Three things in it are load-bearing:
- *
- *   - **`unknown` is offered on every dimension, and is stated to be the right answer when unsure.**
- *     A claim only ever fills a dimension nothing else determined, so an uncertain guess buys back
- *     friction that ignorance had correctly created — the one thing an injected judge is able to do.
- *     Making `unknown` cheap is what keeps that narrow.
- *   - **It asks about the call, never about the conversation.** No summary, no quotation, no
- *     recipient names: what comes back is five closed vocabularies, so invariant #6 holds by the
- *     shape of the answer rather than by a redaction step afterwards.
- *   - **It does not ask whether the call is *allowed*.** The verdict is Heron's and rests on
- *     published rules; a model asked to approve its own action would be answering the question this
- *     whole product exists to take away from it.
- */
-export const INTENT_PROMPT = `You are a fork of the agent session that is about to make the tool calls listed below. Classify each call. This is not a request for permission and your answer does not decide whether a call runs — an independent policy engine decides that, and your answer is recorded beside its decision as testimony.
-
-For each call, answer with these fields:
-
-- operation: read | write | send | delete | execute | unknown
-- data_class: none | operational | financial | credential | personal | unknown
-- destination: none | internal | external | third_party | unknown
-- reversibility: reversible | costly | terminal | unknown
-
-Rules:
-
-1. Answer "unknown" whenever you are not sure. An unsure answer is worse than no answer: a wrong one removes a safeguard that your uncertainty had correctly put in place.
-2. Answer only about the calls listed. Do not describe the conversation, quote it, name any person, or include any content from it.
-3. Reply with JSON and nothing else, in this shape:
-
-{"calls":[{"ref":"<the ref given below>","operation":"...","data_class":"...","destination":"...","reversibility":"..."}]}
-`;
-
-/** Hash of the judging instructions — see `IntentQuestion.promptHash` for what it does and does not cover. */
-export const INTENT_PROMPT_HASH = sha256Tagged(INTENT_PROMPT);
 
 /**
  * How much of the conversation the fork was shown. A label, never the text (invariant #6).
@@ -95,21 +60,6 @@ export const INTENT_PROMPT_HASH = sha256Tagged(INTENT_PROMPT);
  * plan block that governs it.
  */
 export type IntentSlice = "last_turn" | "turn_and_plan" | (string & {});
-
-/** The four dimensions a model is asked about, and why the fifth is missing.
- *
- * `magnitude` is deliberately absent. Its signals are counts — `record_count`, `recipient_count`,
- * `amount` — and a count is a measurement, available to `classifyAtEdge()` from the arguments. Asking
- * a model to produce one would dress an estimate as an observation in the one dimension where the
- * difference is a number a reviewer will read as exact. */
-export const INTENT_DIMENSIONS = [
-  "operation",
-  "data_class",
-  "destination",
-  "reversibility",
-] as const;
-
-export type IntentDimension = (typeof INTENT_DIMENSIONS)[number];
 
 /**
  * Which signal key carries each answered dimension.
@@ -123,27 +73,6 @@ const DIMENSION_SIGNAL: Record<IntentDimension, SignalKey> = {
   data_class: "data_class",
   destination: "destination",
   reversibility: "reversibility",
-};
-
-/**
- * The accepted answers, per dimension.
- *
- * Typed against the taxonomy unions, so a value this file accepts but Heron does not classify is a
- * compile error here rather than a signal silently ignored on the far side. `unknown` is absent from
- * every list on purpose: it is the model declining, and a declined dimension produces no claim at
- * all — sending `"unknown"` as a value would mark a dimension as a model's word and then say nothing
- * with it, which is provenance for a non-answer.
- */
-const ACCEPTED: {
-  operation: readonly Exclude<Operation, "unknown">[];
-  data_class: readonly Exclude<DataClass, "unknown">[];
-  destination: readonly Exclude<Destination, "unknown">[];
-  reversibility: readonly Exclude<Reversibility, "unknown">[];
-} = {
-  operation: ["read", "write", "send", "delete", "execute"],
-  data_class: ["none", "operational", "financial", "credential", "personal"],
-  destination: ["none", "internal", "external", "third_party"],
-  reversibility: ["reversible", "costly", "terminal"],
 };
 
 /** One call, as the fork is told about it. The name only — never the arguments. */
@@ -208,16 +137,16 @@ export function buildIntentQuestion(calls: readonly IntentCall[]): IntentQuestio
 }
 
 /**
- * Turn a model's raw reply into claims, keeping only what is unambiguous.
+ * Turn a model's raw reply into claims, accepting only a complete v2 answer.
  *
- * Strict about values, forgiving about wrapping — the asymmetry is the point. A fenced code block or
- * a bare array is a well-known habit of every current model and costs nothing to accept; a value
- * outside the closed vocabulary is a claim nobody can act on, and admitting it would seal a garbage
- * dimension into an immutable classification. A reply this cannot read produces no claims at all,
- * which leaves every dimension `unknown` — the strict direction.
+ * Strict about the answer contract, forgiving only about legacy wrapping and ref selection. A
+ * fenced code block or a bare array remains accepted for API compatibility. Every row must contain
+ * exactly the v2 fields and values, and duplicate refs reject the whole answer. Valid rows outside
+ * `refs` remain ignored: integrations may ask the fork once for a whole turn, then parse that same
+ * answer once per call. Partial recovery within a row would let an invalid account silently become
+ * a different valid account before it is sealed into an immutable classification.
  *
- * `refs` is what was asked about: an answer naming a call that was not in the question is dropped,
- * because a claim is attributable to a call or it is nothing.
+ * `refs` selects the calls the caller is parsing. Every selected ref must be present exactly once.
  */
 export function parseIntentAnswer(raw: string | null, refs: readonly string[]): IntentClaim[] {
   if (!raw) return [];
@@ -233,35 +162,38 @@ export function parseIntentAnswer(raw: string | null, refs: readonly string[]): 
 
   const rows = Array.isArray(parsed)
     ? parsed
-    : isRecord(parsed) && Array.isArray(parsed.calls)
+    : isRecord(parsed) && hasExactKeys(parsed, ["calls"]) && Array.isArray(parsed.calls)
       ? parsed.calls
       : null;
   if (!rows) return [];
 
   const wanted = new Set(refs);
+  if (wanted.size !== refs.length) return [];
+
   const seen = new Set<string>();
+  const selected = new Set<string>();
   const claims: IntentClaim[] = [];
+  const answerFields = ["ref", ...INTENT_DIMENSIONS];
 
   for (const row of rows) {
-    if (!isRecord(row)) continue;
+    if (!isRecord(row) || !hasExactKeys(row, answerFields)) return [];
     const ref = typeof row.ref === "string" ? row.ref : null;
-    // A second answer for the same call is dropped rather than merged: two accounts of one call are
-    // a model that contradicted itself, and picking one of them is us deciding which it meant.
-    if (!ref || !wanted.has(ref) || seen.has(ref)) continue;
+    if (!ref || seen.has(ref)) return [];
     seen.add(ref);
 
     const dimensions: Partial<Record<IntentDimension, string>> = {};
     for (const dimension of INTENT_DIMENSIONS) {
       const value = row[dimension];
-      if (typeof value !== "string") continue;
-      const accepted: readonly string[] = ACCEPTED[dimension];
-      if (accepted.includes(value)) dimensions[dimension] = value;
+      if (typeof value !== "string" || !isIntentTaxonomyValue(dimension, value)) return [];
+      if (value !== "unknown") dimensions[dimension] = value;
     }
 
+    if (!wanted.has(ref)) continue;
+    selected.add(ref);
     if (Object.keys(dimensions).length > 0) claims.push({ ref, dimensions });
   }
 
-  return claims;
+  return selected.size === wanted.size ? claims : [];
 }
 
 /**
@@ -342,4 +274,9 @@ function stripFence(raw: string): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+function hasExactKeys(record: Record<string, unknown>, expected: readonly string[]): boolean {
+  const actual = Object.keys(record);
+  return actual.length === expected.length && expected.every((key) => actual.includes(key));
 }
