@@ -65,6 +65,39 @@ describe("the question put to the fork", () => {
     }
   });
 
+  it("does not treat the control query for an ordinary external read as an outbound destination", () => {
+    const definitions = Object.fromEntries(
+      INTENT_TAXONOMY.dimensions.destination.values.map(({ value, definition }) => [
+        value,
+        definition,
+      ]),
+    );
+
+    expect(INTENT_TAXONOMY.dimensions.destination.definition).toContain(
+      "meaningful payload or effect",
+    );
+    expect(definitions.none).toContain("ordinary read");
+    expect(definitions.none).toContain("control or query material");
+    expect(definitions.external).toContain("meaningful payload or effect");
+    expect(definitions.external).toContain("outbound send, write");
+    expect(definitions.third_party).toContain("meaningful payload or effect");
+    expect(definitions.third_party).toContain("outbound send, write");
+  });
+
+  it("separates costly recovery from an effect that cannot be recalled or restored", () => {
+    const definitions = Object.fromEntries(
+      INTENT_TAXONOMY.dimensions.reversibility.values.map(({ value, definition }) => [
+        value,
+        definition,
+      ]),
+    );
+
+    expect(definitions.costly).toContain("business state can still be restored");
+    expect(definitions.costly).toContain("audit trail");
+    expect(definitions.terminal).toContain("cannot be recalled");
+    expect(definitions.terminal).toContain("cannot be restored");
+  });
+
   it("contains no tool-specific definitions or preclassified answers", () => {
     expect(INTENT_PROMPT).not.toMatch(/gmail|slack|stripe|attio|apollo|catalogue/i);
     expect(INTENT_TAXONOMY_DOCUMENTATION).not.toMatch(
@@ -82,7 +115,7 @@ describe("the question put to the fork", () => {
     // resolve, and every receipt already in the field would name a question that no longer exists.
     // If this fails, the prompt changed: bump INTENT_PROMPT_VERSION and update the constant here.
     expect(INTENT_PROMPT_HASH).toBe(
-      "sha256:4a27d6cc2a051b4bf0cdbda0d6f1dccced5e85ada9c3c210eb73909827a0c4bc",
+      "sha256:db51b38e1457e36c9c3c20d56386370a4d91aa8ef49805d98a60d38adb37f37c",
     );
     expect(INTENT_PROMPT_HASH).toBe(sha256Tagged(INTENT_PROMPT));
     expect(buildIntentQuestion([]).promptHash).toBe(INTENT_PROMPT_HASH);

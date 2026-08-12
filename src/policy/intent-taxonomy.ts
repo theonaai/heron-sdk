@@ -118,25 +118,27 @@ export const INTENT_TAXONOMY = freezeIntentTaxonomy({
     },
     destination: {
       definition:
-        "The furthest trust boundary across which the call makes data or an effect available. Use third_party instead of external when an independent provider or organization receives it.",
+        "The furthest trust boundary across which the call sends a meaningful payload or effect. Control or query material needed only to perform an ordinary read does not count; if the read itself transmits meaningful data, classify that transmission. Use third_party instead of external when an independent provider or organization receives it.",
       values: [
         {
           value: "none",
-          definition: "The call transfers no data or effect to another trust boundary.",
+          definition:
+            "No meaningful payload or effect crosses a trust boundary. An ordinary read is none when it sends only the control or query material needed to retrieve data, even if the system read is external or third-party.",
         },
         {
           value: "internal",
-          definition: "Data and effects remain inside the current trusted internal boundary.",
+          definition:
+            "A meaningful payload or effect remains inside the current trusted internal boundary.",
         },
         {
           value: "external",
           definition:
-            "Data or effects cross outside the current trusted internal boundary, but not necessarily to an independent external provider or organization. Use third_party when they do.",
+            "An outbound send, write, or other call carries a meaningful payload or effect outside the current trusted internal boundary, but the destination is not known to be an independent external provider or organization. Use third_party when it is known to be one.",
         },
         {
           value: "third_party",
           definition:
-            "Data or effects are transmitted to an independent external provider or organization.",
+            "An outbound send, write, or other call carries a meaningful payload or effect to an independent external provider or organization.",
         },
         {
           value: "unknown",
@@ -145,21 +147,23 @@ export const INTENT_TAXONOMY = freezeIntentTaxonomy({
       ],
     },
     reversibility: {
-      definition: "How completely the call's effects can be undone through supported operation.",
+      definition:
+        "Whether the prior business state and any meaningful external effect can be restored or recalled.",
       values: [
         {
           value: "reversible",
           definition:
-            "The action can be fully undone through a normal supported mechanism, restoring the prior state without material residual consequences.",
+            "A normal supported undo fully restores the prior business state and recalls any meaningful external effect without noticeable time, expense, or manual recovery.",
         },
         {
           value: "costly",
           definition:
-            "Undo is possible, but requires noticeable cost or manual work, or leaves material consequences.",
+            "The prior business state can still be restored through supported or manual recovery, but doing so requires noticeable time, expense, or operator work. A retained audit trail alone does not make the action terminal.",
         },
         {
           value: "terminal",
-          definition: "No normal supported mechanism can fully undo the action and its effects.",
+          definition:
+            "A meaningful external effect cannot be recalled, or the prior business state cannot be restored through supported or manual recovery.",
         },
         {
           value: "unknown",
