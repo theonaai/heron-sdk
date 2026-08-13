@@ -176,20 +176,40 @@ export const HERON_CONTRACTS: ContractMap = {};
 When the user is ready to add entries, the shape is:
 
 ```ts
-"gmail.send": {
-  keep: ["subject"],                 // allowlist: only these arg keys travel (redacted)
-  anchors: { to: "email", cc: "email", bcc: "email" }, // tokenised — the address never crosses
-  signals: ({ args }) => ({ op: "send", recipient_count: 1 }),
-},
-"ATTIO_*":         { signals: () => ({ data_class: "personal" }) },  // glob over tool names
-"server:stripe":   { signals: () => ({ data_class: "financial" }) },  // everything on a server
-"provider:composio": { keep: [] },                                    // everything from a provider
+"gmail.send": defineContract<{ recipient_email: string; extra_recipients?: string[]; thread_id?: string }>({
+  anchors: { recipient_email: "email", extra_recipients: "email" }, // tokenised — addresses never cross
+  resource: ({ args }) => args.thread_id,   // opaque id: "these runs touched the same object"
+  signals: ({ args }) => ({
+    op: "send",
+    recipient_count: 1 + (Array.isArray(args.extra_recipients) ? args.extra_recipients.length : 0),
+  }),
+}),
+"ATTIO_*":       { signals: () => ({ data_class: "personal" }) },   // glob over tool names
+"server:stripe": { signals: () => ({ data_class: "financial" }) },  // everything on a server
+"provider:mybus": { keep: [] },                                     // everything from a provider
 ```
 
-Rules to state in code comments: resolution is by specificity, never key order; the most specific
-`keep` wins whole (a wide key can never widen what leaves the boundary); a wide key declaring a
-`data_class` the user has not checked is a signed falsehood — narrow keys you can defend beat one
-key that covers everything.
+Guidance to encode, in this order of priority:
+
+- **Anchors first.** They are the one measurement that cannot be recovered later: tokenised at the
+  edge, before any redaction, so a window that passes without them permanently loses "did the agent
+  write to the person the user named?". Cover every recipient-shaped key, including fan-out lists.
+- **Be reluctant with `keep`.** It copies values verbatim — it reduces, it does not redact. A prose
+  field (a subject line, a message body) is text about people that no rule reads; keep ids and
+  enums you can defend, not prose.
+- **`resource` is an opaque id, never a value that names a person.** It answers "same conversation /
+  same record across runs", and Heron publishes it as given. A thread id or record id qualifies; a
+  repo `owner/name`, a storage key, a username, or a "reference" field that also accepts free text
+  does not — check the shape and return `undefined` for anything unverified. Losing the linkage is
+  the right cost; disclosing to keep it is not. Returning `undefined` is the ordinary case.
+- **State counts the classifier cannot see.** The edge classifier matches argument keys *exactly*
+  (`to`, `recipients`, `cc`, …). A tool whose args are named differently (`recipient_email`,
+  `extra_recipients`) otherwise crosses with no `recipient_count` and `magnitude: unknown` — the
+  bulk rule dormant on precisely the call it exists for. Fix it in that tool's `signals`, not in
+  `edge.fields`, which replaces a key's list process-wide for every tool.
+- Resolution is by specificity, never key order; the most specific `keep` wins whole (a wide key
+  can never widen what leaves the boundary); a wide key declaring a `data_class` the user has not
+  checked is a signed falsehood — narrow keys you can defend beat one key that covers everything.
 
 ## Phase 5 — The guard in the tool loop
 
@@ -205,6 +225,10 @@ if (heron) {
   const guard = await openGuardedSession({
     heron,
     contracts: HERON_CONTRACTS,
+    // The *specific* agent, not the platform: one shared name means every finding
+    // names every agent at once. Version it, and mark unpublished revisions
+    // distinguishably (e.g. "12+draft") — a published version is something a
+    // person can roll back to.
     agent: { externalId: agentName, version: agentVersion },
     principal: { type: "human", ref: userId },   // an opaque id, never an email address
     request: firstUserMessageText,               // stays on the edge; only its hash crosses
@@ -255,6 +279,11 @@ Wire the rest of the platform's shapes where they exist:
 Do not wrap it in a try/catch that runs the tool anyway, and do not build a shadow switch of your
 own — shadow windows are declared on Heron's side and arrive as `decision.effect === "advisory"`
 (the guard surfaces them as `{ kind: "run", rehearsed: true }`; log that flag).
+
+**Shadow rehearses the full loop.** Under an advisory window the call runs either way — but still
+wire and exercise the approval path: when your UI collects an approval, send `resolves_action` /
+`shown_text_hash` exactly as you would when enforcing. A branch that skips them because
+`kind === "run"` means the one part enforcement will add is the one part never rehearsed.
 
 ## Phase 6 — State that outlives the process
 
