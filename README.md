@@ -15,6 +15,9 @@ npm i @theonaai/heron-sdk
 The scope is `@theonaai`; it names who publishes the package, not who the SDK is for. Any vendor
 integrating Heron installs this one.
 
+Rather have a coding agent do the whole integration? [`skills/`](skills/README.md) ships a
+turnkey setup skill for Claude Code, Codex, and anything else that follows Markdown instructions.
+
 ## Quickstart
 
 ```ts
