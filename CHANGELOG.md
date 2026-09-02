@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.23.0
+
+### Added
+
+- **A fourth `ApprovalSignals` member — the decline your own UI collected before Heron was asked.**
+  The mirror of `human_authorized`, and it names no action for the same reason: a person refused the
+  call on your side, so there is no step-up of ours being answered.
+
+  ```ts
+  await session.decide(call, { human_decision: "DECLINE", approver: reviewerId })
+  // then, on the after-hook
+  await session.report({ actionId, decisionId, outcome: "SKIPPED" })
+  ```
+
+  The server has accepted this since heron-next#211 — it classifies as `prior: true`, publishes, and
+  moves no verdict. What blocked it was this type: the step-up member demands `resolves_action` and
+  the prior-approval member pins `human_decision?: never`, so the one call every integration with its
+  own confirmation UI wants to make did not compile. Nothing changes in `SIGNAL_KEYS`; both keys were
+  already declared.
+
+  **It is inert in both directions.** It lifts nothing, and it denies nothing either: a denial no rule
+  of ours produced is not a verdict a reviewer can audit, and the call was not going to run in any
+  case — the vendor decided that. What it buys is the record. Without it a refused call is
+  indistinguishable from an agent that quietly dropped a planned step, which reads as a gap in the
+  vendor's reporting rather than as the human gate it was.
+
+  `human_authorized: true` sent beside it is refused by the server, and the union now makes that pair
+  a compile error before it gets that far — cleared and refused by the same person on the same call is
+  not a statement anything downstream can act on, and dropping either half would publish the opposite
+  of what half the caller's code believed it said.
+
 ## 0.22.0
 
 ### Added

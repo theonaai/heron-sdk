@@ -88,7 +88,26 @@ action — and it **never lifts a verdict**. There is no action of ours to check
 unverifiable boolean could lift a STEP_UP, every human gate in the system would have a one-key
 bypass. A call that Heron itself steps up still waits for the answer to *that* step-up.
 
-Which is the other shape, and it is checkable, so it does lift:
+The same is true when that person said **no**, and it is worth sending for the same reason. Name no
+action, and send the decision alone:
+
+```ts
+await guard.decide(
+  { name, args, id: toolCallId },
+  { human_decision: "DECLINE", approver: reviewerId },
+);
+```
+
+Then report the call as `outcome: "SKIPPED"` — a human refused it, so nothing was put into the world.
+Without the decline the record shows only an agent that dropped a step it had planned, which reads as
+a gap in your reporting rather than as the human gate it was. It is inert in both directions: it
+lifts nothing, and it denies nothing either, because a denial no rule of ours produced is not a
+verdict a reviewer can audit, and the call was not going to run regardless — you decided that, not
+us. Sending `human_authorized: true` beside it is a `400`: cleared and refused by the same person on
+the same call is not a statement anything downstream can act on, and the `ApprovalSignals` union makes
+the pair a compile error before it gets that far.
+
+Which brings the shape that *is* checkable, so it does lift:
 
 ```ts
 await guard.decide(
