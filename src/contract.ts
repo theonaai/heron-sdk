@@ -121,13 +121,13 @@ export const SIGNAL_KEYS = {
     feeds: "approval",
     type: "string",
     derivable: "none",
-    note: "APPROVE lifts the named STEP_UP; anything else is a decline (an approval must be stated, never assumed).",
+    note: "APPROVE lifts the named STEP_UP; anything else is a decline (an approval must be stated, never assumed). DECLINE sent alone, naming no action, is a refusal the vendor's own UI collected before Heron was asked: recorded and published, never moving a verdict — the mirror of `human_authorized`.",
   },
   approver: {
     feeds: "approval",
     type: "string",
     derivable: "none",
-    note: "Opaque token for who approved — never a name (invariant #6). Enough to tell two approvers apart. Goes with `resolves_action` or with `human_authorized`.",
+    note: "Opaque token for who approved — never a name (invariant #6). Enough to tell two approvers apart. Goes with `resolves_action`, with `human_authorized`, or with a lone `human_decision: DECLINE`.",
   },
   human_authorized: {
     feeds: "approval",

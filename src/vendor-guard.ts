@@ -60,13 +60,13 @@ type StandaloneSignalKey = Exclude<
 >;
 
 /**
- * A human's involvement, as one statement rather than loose keys — in the two shapes it comes in.
+ * A human's involvement, as one statement rather than loose keys — in the three shapes it comes in.
  *
  * **Answering one of Heron's step-ups.** `resolves_action` names it, and without that name the other
  * keys mean nothing: the classifier reads an approval only when it knows which step-up is lifted, so
- * a lone `human_decision` is silently inert. Modelling it as a union makes the incomplete form a
- * compile error at the call site rather than something discovered from a receipt that ignored it —
- * which is how the first integration shipped it, sending a decision and an approver on every
+ * a lone `human_decision: "APPROVE"` is silently inert. Modelling it as a union makes the incomplete
+ * form a compile error at the call site rather than something discovered from a receipt that ignored
+ * it — which is how the first integration shipped it, sending a decision and an approver on every
  * human-cleared call and naming no action at all.
  *
  * **An approval your own UI collected before Heron was asked.** That answers no step-up of ours, so
@@ -74,6 +74,20 @@ type StandaloneSignalKey = Exclude<
  * involved, or did the agent do this alone?" is the first question asked of an executed action, and
  * without it the answer is lost — but it never lifts a verdict, because there is no action of ours
  * to check it against and a claim we cannot check must not open a human gate.
+ *
+ * **A decline your own UI collected before Heron was asked.** The mirror of the one above, and it
+ * names no action for the same reason: send `human_decision: "DECLINE"` on its own. A person looked
+ * at this call on your side and said no, and that is worth as much to a reviewer as the approval is —
+ * without it the record shows an agent that silently dropped a step it had planned, which reads as a
+ * gap in your reporting rather than as the human gate it actually was. It is recorded and published
+ * and, like the approval, it is **inert**: it moves no verdict in either direction. It cannot deny a
+ * call, because a denial that no rule of ours produced is not a verdict anyone can audit, and the
+ * call is already not running — you decided that, not us.
+ *
+ * Do not send `human_authorized: true` beside it. The server refuses the action outright rather than
+ * picking a winner: cleared and refused by the same person on the same call is not a statement
+ * anything downstream can act on, and quietly dropping one half would publish the opposite of what
+ * half your code believed it said. The union makes that pair a compile error here too.
  *
  * Sending nothing is of course fine: an ordinary call carries no approval.
  */
@@ -94,6 +108,14 @@ export type ApprovalSignals =
       approver?: string | null;
       resolves_action?: never;
       human_decision?: never;
+    }
+  | {
+      /** A person refused this call on your side, before Heron saw it. Recorded, published, inert. */
+      human_decision: "DECLINE";
+      /** Opaque token for who decided — never a name (invariant #6). */
+      approver?: string | null;
+      resolves_action?: never;
+      human_authorized?: never;
     }
   | {
       resolves_action?: never;

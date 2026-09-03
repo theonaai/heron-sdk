@@ -265,6 +265,9 @@ Wire the rest of the platform's shapes where they exist:
   shownText })` — pass the text the person actually saw, not a digest.
 - Your own UI cleared the call before Heron saw it: `guard.decide(call, { human_authorized: true,
   approver })` — recorded, never lifts a verdict.
+- A *person* on your side refused the call before Heron saw it: `guard.decide(call, { human_decision:
+  "DECLINE", approver })`, then `guard.report({ …, outcome: "SKIPPED" })` — recorded, never moves a
+  verdict either way. Never send `human_authorized: true` beside it.
 - Your own side refused the call (rate limit, budget, viewer permissions):
   `guard.reportUnattempted({ name, args }, { errorCode })` — call it *after* answering the model;
   silence would be published as `MISSING_EXECUTION`.
